@@ -1,0 +1,85 @@
+# iPXE boot server
+.download.creekside.network
+.download.cn.creekside.network
+
+# Rocky Linux
+.dl.rockylinux.org
+.mirrors.rockylinux.org
+.vault.rockylinux.org
+.keys.rockylinux.org
+
+# CentOS Linux
+.centos.org
+
+# Redhat
+.registry.redhat.io
+.registry.access.redhat.com
+
+# EPEL
+.fedoraproject.org
+.getfedora.org
+.copr-be.cloud.fedoraproject.org
+.elrepo.org
+
+# Almalinux
+repo.iotti.biz
+
+# remi
+rpms.remirepo.net
+
+# rpmfusion
+.rpmfusion.org
+
+# Google Chrome & Linux applications
+.dl.google.com
+.tools.google.com
+.packagecloud.io
+.fedorainfracloud.org
+.packages.endpointdev.com
+
+# China mirrors
+.mirrors.ustc.edu.cn
+.mirrors.aliyun.com
+.mirrors.tuna.tsinghua.edu.cn
+.mirror.nju.edu.cn
+
+# UK mirrors
+.mirrorservice.org
+
+# Docker & container registries
+.quay.io
+.docker.com
+.containerd.io
+.docker.io
+.gcr.io
+.ghcr.io
+.k8s.io
+.mcr.microsoft.com
+.docker.elastic.co
+.nvcr.io
+
+# VSCode & Microsoft packages
+.vscode-cdn.net
+.visualstudio.com
+.azureedge.net
+.azurewebsites.net
+.gallerycdn.vsassets.io
+.github.com
+.githubusercontent.com
+.packages.microsoft.com
+.vscode.download.pr.microsoft.com
+
+# SVN
+opensource.wandisco.com
+
+# sublimetext
+download.sublimetext.com
+
+# pip install packages
+.pypi.org
+.pypi.python.org
+.files.pythonhosted.org
+
+# bcompare
+.scootersoftware.com
+
