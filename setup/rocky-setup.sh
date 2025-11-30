@@ -150,7 +150,7 @@ function install_applications() {
     for pacakge in ${packages[@]}; do
         if ! rpm -q --quiet $pacakge 2>$1; then
             if ! dnf install -yq $pacakge &> /dev/null; then
-                echo -e "⚠️  ${Red}Failed to install package: $pacakge${Res et}"
+                echo -e "⚠️  ${Red}Failed to install package: $pacakge${Reset}"
             else
                 echo "✓ Package installed: $pacakge"
             fi
@@ -251,13 +251,32 @@ function initialization() {
         echo "✓ EPEL repository already installed."
     fi 
 
-    if [[ $os_version == 8* ]]; then
+    if [[ $os_version == "8" ]]; then
         yum config-manager --set-enabled powertools
         echo "✓ Enabled PowerTools repository for $os_name $os_version."
     else
         yum config-manager --set-enabled crb
         echo "✓ Enabled CRB repository for $os_version."
     fi
+
+    cat <<EOF > /etc/yum.repos.d/rpmfusion-free.repo
+[rpmfusion-free-updates]
+name=RPM Fusion for EL ${os_version} - Free - Updates
+baseurl=http://download1.rpmfusion.org/free/el/updates/${os_version}/\$basearch/
+enabled=1
+gpgcheck=0
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-rpmfusion-free-el-${os_version}
+EOF
+
+cat <<EOF > /etc/yum.repos.d/rpmfusion-nonfree.repo
+[rpmfusion-nonfree-updates]
+name=RPM Fusion for EL ${os_version} - Nonfree - Updates
+baseurl=http://download1.rpmfusion.org/nonfree/el/updates/${os_version}/\$basearch/
+enabled=1
+gpgcheck=0
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-rpmfusion-nonfree-el-${os_version}
+EOF
+    echo "✓ Enabled RPM fusion repository."
 
     echo "2) Updating yum repository mirrors..."
     # Configure yum mirrors
@@ -292,7 +311,7 @@ function initialization() {
         "openldap-clients" "ipa-client"
         "sssd" "realmd" "oddjob" "oddjob-mkhomedir"
         "adcli" "samba-common" "samba-common-tools" "krb5-workstation"
-        "firewalld" 
+        "firewalld" "dnf-plugins-core" "policycoreutils-python-utils"
     )
 
     echo "Installing necessary packages..."
@@ -358,7 +377,100 @@ function update_mirrors() {
     echo -e "${Green}Yum repos updated.${Reset}\n\n"
 }
 
-main() {
+# Install Desktop Environment
+function install_desktop() {
+    echo ""
+    echo -e "${Yellow}Install Desktop Environment${Reset}"
+
+    local mate_packages=(
+        abrt-desktop abrt-java-connector adwaita-gtk2-theme alsa-plugins-pulseaudio 
+        atril atril-caja atril-thumbnailer caja caja-actions 
+        caja-image-converter caja-open-terminal caja-sendto caja-wallpaper caja-xattr-tags 
+        dconf-editor engrampa eom firewall-config 
+        gnome-disk-utility gnome-epub-thumbnailer gstreamer1-plugins-ugly-free gtk2-engines 
+        gucharmap gvfs-afc gvfs-afp gvfs-archive 
+        gvfs-fuse gvfs-gphoto2 gvfs-mtp gvfs-smb initial-setup-gui 
+        libmatekbd libmatemixer libmateweather libsecret lm_sensors marco mate-applets 
+        mate-backgrounds mate-calc mate-control-center mate-desktop mate-dictionary 
+        mate-disk-usage-analyzer mate-icon-theme mate-media 
+        mate-menus mate-menus-preferences-category-menu mate-notification-daemon 
+        mate-panel mate-polkit mate-power-manager mate-screensaver 
+        mate-screenshot mate-search-tool mate-session-manager mate-settings-daemon 
+        mate-system-log mate-system-monitor mate-terminal mate-themes 
+        mate-user-admin mate-user-guide mozo network-manager-applet 
+        nm-connection-editor pluma seahorse seahorse-caja 
+        xdg-user-dirs-gtk slick-greeter-mate  
+    )
+
+    echo "1) Installing Xfce Desktop Environment packages..."
+    if ! command -v xfce4-session >/dev/null 2>&1; then
+        if dnf groupinstall -y "Xfce" &> /dev/null; then
+            echo "✓ Xfce Desktop Environment packages installed."
+        else
+            echo -e "⚠️  ${Red}Failed to install Xfce Desktop Environment.${Reset}"
+            return
+        fi
+    else
+        echo "✓ Xfce Desktop Environment already installed."
+    fi
+
+    echo "2) Installing Mate Desktop Environment packages..."
+    if ! command -v mate-session >/dev/null 2>&1; then
+        install_applications "${mate_packages[@]}"
+        echo "✓ Mate Desktop Environment packages installed."
+    else
+        echo "✓ Mate Desktop Environment already installed."
+    fi
+
+    echo "3) Install desktop applications..."
+
+    cat <<EOF > /etc/yum.repos.d/tilix.repo
+[ivoarch-Tilix]
+name=Copr repo for Tilix owned by ivoarch
+baseurl=https://copr-be.cloud.fedoraproject.org/results/ivoarch/Tilix/epel-7-\$basearch/
+type=rpm-md
+skip_if_unavailable=True
+gpgcheck=0
+gpgkey=https://copr-be.cloud.fedoraproject.org/results/ivoarch/Tilix/pubkey.gpg
+repo_gpgcheck=0
+enabled=1
+enabled_metadata=1
+EOF
+
+    echo "✓ Tilix copr repository enabled."
+
+    rpm -v --import https://download.sublimetext.com/sublimehq-rpm-pub.gpg
+    if dnf config-manager --add-repo https://download.sublimetext.com/rpm/stable/x86_64/sublime-text.repo &> /dev/null; then
+        echo "✓ Sublime Text repository added."
+    else
+        echo -e "⚠️  ${Red}Failed to add Sublime Text repository.${Reset}"
+        return
+    fi
+
+    cat <<EOF > /etc/yum.repos.d/google-chrome.repo
+[google-chrome]
+name=Google Chrome
+baseurl=https://dl.google.com/linux/chrome/rpm/stable/x86_64
+enabled=1
+gpgcheck=0
+gpgkey=https://dl-ssl.google.com/linux/linux_signing_key.pub
+EOF
+    echo "✓ Google Chrome repository added."
+
+    local desktop_apps=(
+        "firefox" "thunderbird" "vlc" "gimp" "file-roller" "nautilus" 
+        "ristretto" "transmission-gtk" "hexchat" "gnome-calculator" 
+        "evince" "pluma-plugins" "engrampa" "tilix" "sublime-text"
+        "filezilla" "google-chrome-stable" "libreoffice"
+    )
+
+    install_applications "${desktop_apps[@]}" 
+
+    echo -e "\n${Green}Desktop Environment installation completed.${Reset}\n\n"
+}
+
+# Main program
+function main() {
 
     # print title and copyright box
     cat <<EOF
@@ -379,7 +491,7 @@ EOF
 
     # Check OS version
     os_name=$(grep '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"')
-    os_version=$(grep '^VERSION_ID=' /etc/os-release | cut -d= -f2 | tr -d '"')
+    os_version=$(grep '^VERSION_ID=' /etc/os-release | cut -d= -f2 | tr -d '"' | cut -d. -f1)
     if [[ "$os_name" != "rocky" ]]; then
         echo -e "${Red}This script is intended for Rocky Linux only. Detected OS: $os_name $os_version${Reset}"
         exit 1
@@ -396,7 +508,7 @@ EOF
         menu_items=(
             "Initialization" 
             "Update yum mirrors" 
-            "Install Desktop" 
+            "Install Desktop Environment" 
             "Exit"
         )
         show_menu "Main menu" "${menu_items[@]}"
