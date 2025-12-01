@@ -483,41 +483,29 @@ EOF
 
 # Get AD user groups 
 function get_ad_user_groups() {
-    local group_type="$1"
+    local title="$1"
     local groups=""
 
     echo ""
-    echo "Add $group_type to be granted access (leave blank to finish):"
+    echo "${Green}$title${Reset}"
 
-    local index=0
-    while true; do
+    local index=1
+    while [ $index -le 4 ]; do
         group_name=""
-        read -p "$index) $group_type group name: " group_name
+        read -p "[$index]. group name (leave blank to finish): " group_name
         if [[ -z "$group_name" ]]; then
             break
         fi
-        echo "Checking group '$group_name' in AD..."
+        #echo "Checking group '$group_name' in AD..."
         # check if group exists in AD
-        if ! getent group "$group_name@$domain_name" &> /dev/null; then
+        if ! getent group "$group_name" &> /dev/null; then
             echo -e "⚠️  ${Red}Group '$group_name' not found. Please try again.${Reset}"
             continue
         else
-            echo "✓ Group '$group_name' added."
+            #echo "✓ Group '$group_name' added."
             groups+="$group_name "
-            break
         fi
-
-        if [[ -z "$group_name" ]]; then
-            break
-        else
-            echo "index=$index."
-        fi
-
         index=$((index + 1))
-
-        if [ $index -ge 4 ]; then
-            break
-        fi
     done
 
     USER_GROUPS="$groups"
@@ -587,7 +575,7 @@ function enroll_domain() {
             # Prompt for admin credentials
             read -p "Enter admin username for $domain_name: " admin_user
             if [[ -z "$admin_user" ]]; then
-                echo "Admin username cannot be empty. Please try again."
+                echo "⚠️  Admin username cannot be empty. Please try again."
                 continue
             fi
             break
@@ -596,7 +584,7 @@ function enroll_domain() {
         while true; do
             read -s -p "Enter password for $admin_user: " admin_pass
             if [[ -z "$admin_pass" ]]; then
-                echo -e "\nPassword cannot be empty. Please try again."
+                echo -e "\n⚠️  Password cannot be empty. Please try again."
                 continue
             fi
             break
@@ -655,19 +643,6 @@ function enroll_domain() {
             return 0
         fi
 
-        # Get AD user groups for access
-        get_ad_user_groups "admin"
-        admin_groups="$USER_GROUPS"
-        access_groups=$USER_GROUPS
-
-        get_ad_user_groups "access"
-        access_groups+=$USER_GROUPS
-
-        echo "User groups have access: $access_groups"
-        echo "Admin groups have access: $admin_groups"
-
-        realm permit -g "$access_groups"
-
         printf "\nUpdate SSSD configuration\n"
         # Update SSSD configuration in-place, preserving order
         SSSD_CONF="/etc/sssd/sssd.conf"
@@ -693,15 +668,40 @@ function enroll_domain() {
         # Set proper permissions
         chmod 600 "$SSSD_CONF"
 
-        cat /etc/sssd/sssd.conf
-
-        # Here is the new sssd.conf content
-        echo -e "\nUpdated /etc/sssd/sssd.conf content:"
-
         # clean sssd cache
         systemctl stop sssd
         rm -rf /var/lib/sss/db/*
         systemctl start sssd
+
+        get_ad_user_groups "Adding groups with sudo access"
+        admin_groups="$USER_GROUPS"
+
+        get_ad_user_groups "Adding groups with regular access"
+        access_groups="$USER_GROUPS"
+
+        # Configure sudoers for admin groups
+        SUDOERS_FILE="/etc/sudoers.d/90-ad-groups"
+        echo "# Sudoers file for AD groups - generated on $(date)" > "$SUDOERS_FILE"
+        for group in $admin_groups; do
+            echo "%$group ALL=(ALL) NOPASSWD: ALL" >> "$SUDOERS_FILE"
+        done
+        chmod 640 "$SUDOERS_FILE"
+        echo "✓ Successfully added [$admin_groups] to sudo access."
+
+
+        # Permit access to specified groups
+        # Combine admin_groups and access_groups, remove duplicates and empty entries
+        combined_groups=$(echo "$admin_groups $access_groups" | tr ' ' '\n' | grep -v '^$' | sort -u | tr '\n' ' ' | xargs)
+        if [[ -n "$combined_groups" ]]; then
+            # Pass each group as a separate argument to realm permit
+            if realm permit -g $combined_groups; then
+                echo "✓ Permitted [$combined_groups] to access this machine."
+            else
+                echo "⚠️  Failed to permit [$combined_groups] to access this machine."
+            fi
+        else
+            echo "⚠️  No groups specified. Skipping realm permit."
+        fi
 
         return 0
     fi
