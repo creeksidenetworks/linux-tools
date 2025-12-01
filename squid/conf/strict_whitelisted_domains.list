@@ -79,8 +79,11 @@ download.sublimetext.com
 
 # pip install packages
 .pypi.org
-.pypi.python.org
+.python.org
 .files.pythonhosted.org
 
 # WPS
 .wpscdn.com
+
+# gnu
+ftp.gnu.org

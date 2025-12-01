@@ -2,8 +2,6 @@
 # Rocky Linux Setup Utility
 # Usage: ssh -t <host> "$(<./rocky-setup.sh)" or run locally
 
-set -e
-
 # Colors
 Black=$(tput setaf 0)	#${Black}
 Red=$(tput setaf 1)	    #${Red}
@@ -38,10 +36,24 @@ EPEL_MIRRORS["GB"]="https://www.mirrorservice.org/pub/epel"
 BASE_MIRRORS["AE"]="https://mirror.ourhost.az/rockylinux/"
 EPEL_MIRRORS["AE"]="https://mirror.yer.az/fedora-epel/"
 
+tmp_file=$(mktemp /tmp/rocky-setup.XXXXXX)
+trap cleanup_existing EXIT
+
 function cleanup_existing() {
-    echo -e "${Reset}Exiting.\n\n"
+    echo -e "${Reset}Cleanup & exiting.\n\n"
+    rm -f "$tmp_file"
     exit 0
 }
+
+function download_apps() {
+    local url="$1"
+    local dest="$2"
+    local path="/resource/apps/"
+
+    url="sftp://ftp.creekside.network:58222"
+    curl --silent --list --user downloader:Kkg94290 --insecure ${url}/${path}/
+
+}   
 
 # Add SSH keys to root authorized_keys
 function add_root_ssh_keys() {
@@ -469,6 +481,232 @@ EOF
     echo -e "\n${Green}Desktop Environment installation completed.${Reset}\n\n"
 }
 
+# Get AD user groups 
+function get_ad_user_groups() {
+    local group_type="$1"
+    local groups=""
+
+    echo ""
+    echo "Add $group_type to be granted access (leave blank to finish):"
+
+    local index=0
+    while true; do
+        group_name=""
+        read -p "$index) $group_type group name: " group_name
+        if [[ -z "$group_name" ]]; then
+            break
+        fi
+        echo "Checking group '$group_name' in AD..."
+        # check if group exists in AD
+        if ! getent group "$group_name@$domain_name" &> /dev/null; then
+            echo -e "⚠️  ${Red}Group '$group_name' not found. Please try again.${Reset}"
+            continue
+        else
+            echo "✓ Group '$group_name' added."
+            groups+="$group_name "
+            break
+        fi
+
+        if [[ -z "$group_name" ]]; then
+            break
+        else
+            echo "index=$index."
+        fi
+
+        index=$((index + 1))
+
+        if [ $index -ge 4 ]; then
+            break
+        fi
+    done
+
+    USER_GROUPS="$groups"
+}
+
+# Function to update or add a setting in the domain section
+update_setting() {
+    local key="$1"
+    local value="$2"
+    local section="$3"
+    local conf_file="$4"
+
+    # Check if the setting exists in the domain section
+    if grep -q "^[[:space:]]*$key[[:space:]]*=[[:space:]]*" "$conf_file"; then
+        # Replace existing line
+        sed -i "/^\[${section}\//,/^\[/ s|^[[:space:]]*$key[[:space:]]*=[[:space:]]*.*|$key = $value|" "$conf_file"
+    else
+        # Add new line after the domain section header
+        sed -i "/^\[${section}\//a $key = $value" "$conf_file"
+    fi
+}
+
+# Enroll host to domain
+function enroll_domain() {
+
+    # Check if already joined
+    current_domain=$(realm list | grep domain-name | cut -d ':' -f 2 | xargs)
+    if [[ -n $current_domain ]]; then
+        echo -e "\n${Yellow}**** Domain service ****${Reset}"
+        echo "✓ This machine is already joined to $current_domain."
+        echo ""
+
+        return 0
+    fi
+
+    while true; do
+        echo -e "\n${Yellow}**** Domain service ****${Reset}"
+        # Detect FQDN from host
+        default_fqdn=$(hostname -f 2>/dev/null)
+        if [[ -z "$default_fqdn" || "$default_fqdn" == "localhost" ]]; then
+            default_fqdn=""
+        fi
+        read -p "Enter the FQDN hostname for this machine [${default_fqdn}]: " fqdn_hostname
+        if [[ -z "$fqdn_hostname" ]]; then
+            fqdn_hostname="$default_fqdn"
+        fi
+        # Derive domain name from FQDN
+        domain_name="${fqdn_hostname#*.}"
+        if [[ "$domain_name" == "$fqdn_hostname" ]]; then
+            echo "Invalid FQDN. Could not derive domain name."
+            continue
+        fi
+
+        # Discover domain info
+        realm_output=$( realm discover "$domain_name" 2>/dev/null || true)
+
+        # Determine domain type
+        domain_type=$(echo "$realm_output" | awk -F': ' '/server-software:/ {if ($2 ~ /active-directory/) print "Active Directory"; else if ($2 ~ /ipa/) print "FreeIPA"; else print "Unknown"}')
+
+        if [[ -z $domain_type || "$domain_type" == "Unknown" ]]; then
+            echo "⚠️  Domain $domain_name not found"
+            echo "Please check the domain name and network connectivity."
+            return 0
+        fi
+
+        while true; do
+            # Prompt for admin credentials
+            read -p "Enter admin username for $domain_name: " admin_user
+            if [[ -z "$admin_user" ]]; then
+                echo "Admin username cannot be empty. Please try again."
+                continue
+            fi
+            break
+        done
+
+        while true; do
+            read -s -p "Enter password for $admin_user: " admin_pass
+            if [[ -z "$admin_pass" ]]; then
+                echo -e "\nPassword cannot be empty. Please try again."
+                continue
+            fi
+            break
+        done
+
+        # Confirm details
+        echo ""
+        echo ""
+        echo "Summary of your entries:"
+        echo "------------------------"
+        printf " %-12s : %-30s\n" "Hostname" "$fqdn_hostname"
+        printf " %-12s : %-30s\n" "Domain" "$domain_name"
+        printf " %-12s : %-30s\n" "Type" "$domain_type"
+        printf " %-12s : %-30s\n" "Admin User" "$admin_user"
+        echo ""
+        read -p "Proceed to join $domain_type? (y/N): " proceed
+        if [[ "$proceed" =~ ^[Yy]$ ]]; then
+            break
+        else
+            echo "Operation cancelled. Returning to main menu."
+            return
+        fi
+    done
+
+    echo ""
+    echo "Now joining domain $domain_name..."
+    # Set hostname
+    sudo hostnamectl set-hostname "$fqdn_hostname"
+    echo "✓ Hostname set to $fqdn_hostname."
+
+    # Enroll host to domain
+    echo "Enrolling host to domain $domain_name..."
+    if [[ "$domain_type" == "FreeIPA" ]]; then
+        # Join FreeIPA domain
+        ipa-client-install \
+            -p "$admin_user" \
+            -w "$admin_pass" \
+            --hostname="$fqdn_hostname" \
+            --domain="$domain_name" \
+            --principal="$admin_user" \
+            --force-ntpd \
+            --mkhomedir \
+            --unattended
+        if [[ $? -eq 0 ]]; then
+            echo "✓ Successfully joined $domain_name ($domain_type)."
+        else
+            echo "⚠️  Failed to join FreeIPA domain. Please check credentials and network connectivity."
+        fi
+    else
+        # Join Active Directory domain        
+        echo "$admin_pass" | realm join --user="$admin_user" "$domain_name"
+        if [[ $? -eq 0 ]]; then
+            echo "✓ Successfully joined $domain_name ($domain_type)."
+        else
+            echo "⚠️  Failed to join domain. Please check credentials and network connectivity."
+            return 0
+        fi
+
+        # Get AD user groups for access
+        get_ad_user_groups "admin"
+        admin_groups="$USER_GROUPS"
+        access_groups=$USER_GROUPS
+
+        get_ad_user_groups "access"
+        access_groups+=$USER_GROUPS
+
+        echo "User groups have access: $access_groups"
+        echo "Admin groups have access: $admin_groups"
+
+        realm permit -g "$access_groups"
+
+        printf "\nUpdate SSSD configuration\n"
+        # Update SSSD configuration in-place, preserving order
+        SSSD_CONF="/etc/sssd/sssd.conf"
+        BACKUP_CONF="${SSSD_CONF}.bak.$(date +%Y%m%d_%H%M%S)"
+
+        # Backup the current config
+        cp "$SSSD_CONF" "$BACKUP_CONF"
+
+        # Settings to update (key => value)
+        declare -A settings=(
+            ["use_fully_qualified_names"]="False"
+            ["fallback_homedir"]="/home/%u"
+            ["ad_gpo_access_control"]="disabled"
+            ["ad_gpo_map_remote_interactive"]="+xrdp-sesman"
+            ["default_shell"]="bash"
+        )
+
+        # Update each setting
+        for key in "${!settings[@]}"; do
+            update_setting "$key" "${settings[$key]}" "domain" "$SSSD_CONF"
+        done
+
+        # Set proper permissions
+        chmod 600 "$SSSD_CONF"
+
+        cat /etc/sssd/sssd.conf
+
+        # Here is the new sssd.conf content
+        echo -e "\nUpdated /etc/sssd/sssd.conf content:"
+
+        # clean sssd cache
+        systemctl stop sssd
+        rm -rf /var/lib/sss/db/*
+        systemctl start sssd
+
+        return 0
+    fi
+}
+
 # Main program
 function main() {
 
@@ -509,6 +747,7 @@ EOF
             "Initialization" 
             "Update yum mirrors" 
             "Install Desktop Environment" 
+            "Join a domain"
             "Exit"
         )
         show_menu "Main menu" "${menu_items[@]}"
@@ -516,10 +755,11 @@ EOF
             0) initialization;;
             1) yum_configure_mirror;;
             2) install_desktop;;
-            3) cleanup_existing;;
+            3) enroll_domain;;
+            4) cleanup_existing;;
             *) echo "Invalid option.";;
         esac
     done
 }
 
-main
+main "$@"
