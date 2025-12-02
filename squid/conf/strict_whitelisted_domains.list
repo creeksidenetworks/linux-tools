@@ -1,6 +1,7 @@
 # iPXE boot server
-.download.creekside.network
-.download.cn.creekside.network
+download.creekside.network
+download.cn.creekside.network
+ftp.creekside.network
 
 # Rocky Linux
 .dl.rockylinux.org

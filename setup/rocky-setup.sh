@@ -202,16 +202,10 @@ function detect_location() {
         #echo -e "✓ Detected location: Country=$COUNTRY, Timezone=$TIMEZONE"
     fi
     if [[ -z "$COUNTRY" ]] || [[ ! " ${countries[@]} " =~ " $COUNTRY " ]]; then
-        echo -e "⚠️  Could not retrieve geolocation info."
-        # Prompt user for country/region
-        show_menu "Select your country/region" "${regions[@]}"
-        if (( menu_index >= 0 && menu_index < ${#countries[@]} )); then
-            COUNTRY="${countries[$menu_index]}"
-            TIMEZONE="${timezones[$menu_index]}"
-        else
-            COUNTRY="GLOBAL"
-            TIMEZONE="UTC"
-        fi
+        echo -e "⚠️  Could not retrieve geolocation info, use USA as default."
+        # Set default to USA, user can change later
+        COUNTRY="US"
+        TIMEZONE="America/Los_Angeles"
     fi
     # Export variables for use in initialization
     export COUNTRY TIMEZONE
@@ -858,7 +852,7 @@ function install_devtools() {
         "libpng-devel" "libjpeg-turbo-devel" "giflib-devel" 
         "libtiff-devel" "hunspell" "hunspell-en" "python3.9"
     )
-
+    
     #---------------------------------------------------------------------------
     print_step "1" "Installing Development Tools Group"
     #---------------------------------------------------------------------------
@@ -872,7 +866,77 @@ function install_devtools() {
     print_step "2" "Installing Development Libraries"
     #---------------------------------------------------------------------------
     print_info "Installing ${#dev_packages[@]} packages..."
-    install_applications "${dev_packages[@]}" 
+    install_applications "${dev_packages[@]}"
+
+    #---------------------------------------------------------------------------
+    print_step "3" "Installing Visual Studio Code"
+    #---------------------------------------------------------------------------
+    if ! command -v code &>/dev/null; then
+        rpm -v --import https://packages.microsoft.com/keys/microsoft.asc 2>/dev/null
+        cat <<EOF > /etc/yum.repos.d/vscode.repo
+[code]
+name=Visual Studio Code
+baseurl=https://packages.microsoft.com/yumrepos/vscode
+enabled=1
+gpgcheck=1
+gpgkey=https://packages.microsoft.com/keys/microsoft.asc
+EOF
+        if dnf install -y code &>/dev/null; then
+            print_ok "Visual Studio Code installed"
+        else
+            print_error "Failed to install Visual Studio Code"
+        fi
+    else
+        print_ok "Visual Studio Code (already installed)"
+    fi
+
+    #---------------------------------------------------------------------------
+    print_step "4" "Configuring VS Code launch options"
+    #---------------------------------------------------------------------------
+    if [[ -f /usr/bin/code ]]; then
+        local proxy_line=""
+        local vscode_opts="--disable-gpu"
+        
+        # Check if proxy is configured in yum.conf
+        if grep -q '^proxy=' /etc/yum.conf; then
+            proxy_line=$(grep '^proxy=' /etc/yum.conf | head -1 | cut -d'=' -f2)
+            if [[ -n "$proxy_line" ]]; then
+                vscode_opts="--disable-gpu --proxy-server=$proxy_line"
+            fi
+        fi
+        
+        # Check if options already configured
+        if ! grep -qF 'VSCODE_CLI_OPTIONS' /usr/bin/code; then
+            # Backup original
+            cp /usr/bin/code /usr/bin/code.bak
+            
+            # Create patched version with options
+            cat > /usr/bin/code <<'ENDOFCODE'
+#!/usr/bin/env bash
+# Patched by rocky-setup.sh - VS Code launch options
+ENDOFCODE
+            echo "VSCODE_CLI_OPTIONS=\"$vscode_opts\"" >> /usr/bin/code
+            cat >> /usr/bin/code <<'ENDOFCODE'
+
+# Get the actual code binary path
+VSCODE_PATH="$(dirname "$(readlink -f "$0")")"
+if [[ -f "$VSCODE_PATH/code.bak" ]]; then
+    ELECTRON_RUN_AS_NODE=1 exec "$VSCODE_PATH/code.bak" "$VSCODE_PATH/code.bak" $VSCODE_CLI_OPTIONS "$@"
+else
+    # Fallback to standard electron location
+    ELECTRON="$VSCODE_PATH/../lib/code/code"
+    CLI="$VSCODE_PATH/../lib/code/out/cli.js"
+    ELECTRON_RUN_AS_NODE=1 exec "$ELECTRON" "$CLI" $VSCODE_CLI_OPTIONS "$@"
+fi
+ENDOFCODE
+            chmod +x /usr/bin/code
+            print_ok "VS Code configured with: $vscode_opts"
+        else
+            print_ok "VS Code launch options already configured"
+        fi
+    else
+        print_warn "/usr/bin/code not found for launch option patching"
+    fi
 
     echo ""
     echo -e "${Green}${Bold}✓ Development tools installation completed${Reset}"
@@ -1318,6 +1382,668 @@ EOF
     echo ""
 }
 
+# Install xrdp remote desktop
+function install_xrdp() {
+    print_header "xrdp Remote Desktop Installation"
+
+    if rpm -q --quiet xrdp; then
+        print_ok "xrdp already installed"
+        return 0
+    fi
+
+    local allow_clipboard="N"
+    local allow_drivemap="N"
+
+    while true; do
+        echo ""
+        printf "  ${Cyan}1.${Reset} Allow clipboard (cut/copy from server)? "
+        read -p "[y/N]: " clipboard_input
+        [[ "$clipboard_input" =~ ^[Yy]$ ]] && allow_clipboard="Y"
+
+        printf "  ${Cyan}2.${Reset} Allow drive mapping (map remote drives)? "
+        read -p "[y/N]: " drivemap_input
+        [[ "$drivemap_input" =~ ^[Yy]$ ]] && allow_drivemap="Y"
+
+        local summary_items=(
+            "Clipboard:     $allow_clipboard"
+            "Drive Mapping: $allow_drivemap"
+        )
+        print_summary "xrdp Configuration" "${summary_items[@]}"
+
+        echo ""
+        read -p "  Proceed with installation? [y/N]: " confirm
+        if [[ "$confirm" =~ ^[Yy]$ ]]; then
+            break
+        else
+            read -p "  Return to remote desktop menu? [y/N]: " return_menu
+            [[ "$return_menu" =~ ^[Yy]$ ]] && return
+        fi
+    done
+
+    #---------------------------------------------------------------------------
+    print_step "1" "Installing xrdp packages"
+    #---------------------------------------------------------------------------
+    local xrdp_packages=("tigervnc" "tigervnc-server" "xrdp")
+    install_applications "${xrdp_packages[@]}"
+
+    #---------------------------------------------------------------------------
+    print_step "2" "Configuring xrdp"
+    #---------------------------------------------------------------------------
+    local xrdp_ini="/etc/xrdp/xrdp.ini"
+
+    # Enable channels
+    sed -i 's/^allow_channels=.*/allow_channels=true/' "$xrdp_ini" 2>/dev/null || echo "allow_channels=true" >> "$xrdp_ini"
+
+    # Drive remap
+    if [[ "$allow_drivemap" == "Y" ]]; then
+        sed -i 's/^rdpdr=.*/rdpdr=true/' "$xrdp_ini" 2>/dev/null
+    else
+        sed -i 's/^rdpdr=.*/rdpdr=false/' "$xrdp_ini" 2>/dev/null
+    fi
+
+    # Sound
+    sed -i 's/^rdpsnd=.*/rdpsnd=true/' "$xrdp_ini" 2>/dev/null
+
+    # Clipboard
+    if [[ "$allow_clipboard" == "Y" ]]; then
+        sed -i 's/^cliprdr=.*/cliprdr=true/' "$xrdp_ini" 2>/dev/null
+    else
+        sed -i 's/^cliprdr=.*/cliprdr=false/' "$xrdp_ini" 2>/dev/null
+    fi
+
+    print_ok "xrdp.ini configured"
+
+    #---------------------------------------------------------------------------
+    print_step "3" "Configuring Firewall"
+    #---------------------------------------------------------------------------
+    firewall-cmd --permanent -q --add-port=3389/tcp
+    firewall-cmd -q --reload
+    print_ok "Port 3389/tcp opened"
+
+    #---------------------------------------------------------------------------
+    print_step "4" "Starting xrdp Service"
+    #---------------------------------------------------------------------------
+    systemctl enable xrdp -q
+    systemctl restart xrdp -q
+    print_ok "xrdp service enabled and started"
+
+    #---------------------------------------------------------------------------
+    print_step "5" "Configuring User Session"
+    #---------------------------------------------------------------------------
+    echo "mate-session" > /etc/skel/.Xclients
+    chmod a+x /etc/skel/.Xclients
+    print_ok "Default session set to MATE"
+
+    # Update existing user homes
+    for user_home in /home/*; do
+        if [[ -d "$user_home" ]]; then
+            local user=$(basename "$user_home")
+            cp /etc/skel/.Xclients "$user_home/.Xclients"
+            chown "$user:" "$user_home/.Xclients"
+            chmod a+x "$user_home/.Xclients"
+        fi
+    done
+    print_ok "Existing user homes updated"
+
+    echo ""
+    echo -e "${Green}${Bold}✓ xrdp installation completed${Reset}"
+    echo ""
+}
+
+# Install RealVNC Server
+function install_realvnc() {
+    print_header "RealVNC Server Installation"
+
+    local http_base="https://download.creekside.network/resource/apps/realVNC"
+    local http_user="downloader"
+    local http_pass="Khyp04682"
+
+    if rpm -q --quiet realvnc-vnc-server; then
+        print_ok "RealVNC Server already installed"
+        return 0
+    fi
+
+    local allow_clipboard="N"
+    local allow_fileshare="N"
+    local license_key=""
+
+    while true; do
+        echo ""
+        # Check if xrdp is installed
+        if rpm -q --quiet xrdp; then
+            print_warn "xrdp is installed and will be removed"
+        fi
+
+        printf "  ${Cyan}1.${Reset} License key (xxxxx-xxxxx-xxxxx-xxxxx-xxxxx): "
+        read license_key
+        if [[ ! "$license_key" =~ ^[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{5}$ ]]; then
+            print_warn "Invalid license key format"
+            continue
+        fi
+
+        printf "  ${Cyan}2.${Reset} Allow clipboard (cut/copy from server)? "
+        read -p "[y/N]: " clipboard_input
+        [[ "$clipboard_input" =~ ^[Yy]$ ]] && allow_clipboard="Y"
+
+        printf "  ${Cyan}3.${Reset} Allow file sharing? "
+        read -p "[y/N]: " fileshare_input
+        [[ "$fileshare_input" =~ ^[Yy]$ ]] && allow_fileshare="Y"
+
+        local summary_items=(
+            "License Key:   ${license_key:0:5}-*****-*****-*****-${license_key: -5}"
+            "Clipboard:     $allow_clipboard"
+            "File Sharing:  $allow_fileshare"
+        )
+        print_summary "RealVNC Configuration" "${summary_items[@]}"
+
+        echo ""
+        read -p "  Proceed with installation? [y/N]: " confirm
+        if [[ "$confirm" =~ ^[Yy]$ ]]; then
+            break
+        else
+            read -p "  Return to remote desktop menu? [y/N]: " return_menu
+            [[ "$return_menu" =~ ^[Yy]$ ]] && return
+        fi
+    done
+
+    #---------------------------------------------------------------------------
+    print_step "1" "Removing Conflicting Packages"
+    #---------------------------------------------------------------------------
+    if rpm -q --quiet xrdp; then
+        dnf remove -y tigervnc tigervnc-server xrdp &>/dev/null
+        firewall-cmd --permanent --remove-port=3389/tcp &>/dev/null
+        print_ok "Removed xrdp and related packages"
+    else
+        print_ok "No conflicting packages found"
+    fi
+
+    #---------------------------------------------------------------------------
+    print_step "2" "Installing VNC Dummy Video Driver"
+    #---------------------------------------------------------------------------
+    # Install development tools if needed
+    if ! rpm -q --quiet gcc; then
+        dnf groupinstall -y "Development Tools" &>/dev/null
+        print_ok "Development tools installed"
+    fi
+
+    local vnc_dev_packages=("autoconf" "automake" "libtool" "make" "pkgconfig" "xorg-x11-server-devel")
+    install_applications "${vnc_dev_packages[@]}"
+
+    local work_dir=$(mktemp -d)
+    
+    # Download and build VNC driver
+    curl --silent --user "$http_user:$http_pass" "$http_base/driver/xf86-video-vnc-master.zip" -o "$work_dir/xf86-video-vnc-master.zip"
+    
+    if [[ -f "$work_dir/xf86-video-vnc-master.zip" ]]; then
+        cd "$work_dir"
+        unzip -q xf86-video-vnc-master.zip
+        cd xf86-video-vnc-master
+        ./buildAndInstall automated &>/dev/null
+        print_ok "VNC dummy video driver installed"
+    else
+        print_warn "Could not download VNC driver (optional for 4K support)"
+    fi
+
+    #---------------------------------------------------------------------------
+    print_step "3" "Downloading RealVNC Server"
+    #---------------------------------------------------------------------------
+    # Find the latest RPM in the server directory
+    local vnc_rpm=""
+    while read -r filename; do
+        if [[ "$filename" == *"Linux-x64.rpm" && "$filename" != *"@"* ]]; then
+            vnc_rpm="$filename"
+            break
+        fi
+    done < <(curl --silent --user "$http_user:$http_pass" "$http_base/server/" 2>/dev/null | grep -oP 'href="\K[^"]+\.rpm')
+
+    if [[ -z "$vnc_rpm" ]]; then
+        print_error "No RealVNC RPM package found"
+        rm -rf "$work_dir"
+        return 1
+    fi
+
+    curl -# --user "$http_user:$http_pass" "$http_base/server/$vnc_rpm" -o "$work_dir/$vnc_rpm"
+    print_ok "Downloaded: $vnc_rpm"
+
+    #---------------------------------------------------------------------------
+    print_step "4" "Installing RealVNC Server"
+    #---------------------------------------------------------------------------
+    if dnf localinstall -y "$work_dir/$vnc_rpm" &>/dev/null; then
+        print_ok "RealVNC Server installed"
+    else
+        print_error "Failed to install RealVNC Server"
+        rm -rf "$work_dir"
+        return 1
+    fi
+
+    #---------------------------------------------------------------------------
+    print_step "5" "Configuring RealVNC"
+    #---------------------------------------------------------------------------
+    mkdir -p /etc/vnc/config.d
+
+    cat > /etc/vnc/config.d/common.custom <<EOF
+DisableOptions=FALSE
+EnableRemotePrinting=FALSE
+Encryption=AlwaysOn
+AllowChangeDefaultPrinter=FALSE
+AcceptCutText=TRUE
+Authentication=SystemAuth
+RootSecurity=TRUE
+AuthTimeout=30
+BlackListThreshold=10
+BlackListTimeout=30
+DisableAddNewClient=TRUE
+DisableTrayIcon=2
+EnableManualUpdateChecks=FALSE
+EnableAutoUpdateChecks=0
+GuestAccess=0
+EnableGuestLogin=FALSE
+AllowTcpListenRfb=TRUE
+AllowHTTP=FALSE
+IdleTimeout=0
+QuitOnCloseStatusDialog=FALSE
+AlwaysShared=TRUE
+NeverShared=FALSE
+DisconnectClients=FALSE
+ServiceDiscoveryEnabled=FALSE
+_ConnectToExisting=1
+RandR=1920x1080,3840x2160,3840x1080,3840x1440,2560x1080,1680x1050,1600x1200,1400x1050,1360x768,1280x1024,1280x960,1280x800,1024x768
+EOF
+
+    # Clipboard setting
+    if [[ "$allow_clipboard" == "Y" ]]; then
+        echo "SendCutText=TRUE" >> /etc/vnc/config.d/common.custom
+    else
+        echo "SendCutText=FALSE" >> /etc/vnc/config.d/common.custom
+    fi
+
+    # File sharing setting
+    if [[ "$allow_fileshare" == "Y" ]]; then
+        echo "ShareFiles=TRUE" >> /etc/vnc/config.d/common.custom
+    else
+        echo "ShareFiles=FALSE" >> /etc/vnc/config.d/common.custom
+    fi
+
+    print_ok "VNC configuration created"
+
+    # Configure PAM authentication
+    cat > /etc/pam.d/vncserver.custom <<EOF
+auth include password-auth
+account include password-auth
+session include password-auth
+EOF
+    echo "PamApplicationName=vncserver.custom" >> /etc/vnc/config.d/common.custom
+    print_ok "PAM authentication configured"
+
+    #---------------------------------------------------------------------------
+    print_step "6" "Adding License Key"
+    #---------------------------------------------------------------------------
+    if vnclicense -add "$license_key" &>/dev/null; then
+        print_ok "License key added"
+    else
+        print_error "Failed to add license key"
+    fi
+
+    #---------------------------------------------------------------------------
+    print_step "7" "Configuring Firewall"
+    #---------------------------------------------------------------------------
+    firewall-cmd --permanent --add-service=vncserver-virtuald &>/dev/null
+    firewall-cmd --reload &>/dev/null
+    print_ok "Firewall configured for VNC"
+
+    #---------------------------------------------------------------------------
+    print_step "8" "Starting VNC Service"
+    #---------------------------------------------------------------------------
+    systemctl enable vncserver-virtuald.service --now &>/dev/null
+    print_ok "VNC virtual desktop service started"
+
+    #---------------------------------------------------------------------------
+    print_step "9" "Configuring User Session"
+    #---------------------------------------------------------------------------
+    echo "mate-session" > /etc/skel/.Xclients
+    chmod a+x /etc/skel/.Xclients
+    print_ok "Default session set to MATE"
+
+    # Update existing user homes
+    for user_home in /home/*; do
+        if [[ -d "$user_home" ]]; then
+            local user=$(basename "$user_home")
+            cp /etc/skel/.Xclients "$user_home/.Xclients"
+            chown "$user:" "$user_home/.Xclients"
+            chmod a+x "$user_home/.Xclients"
+        fi
+    done
+    print_ok "Existing user homes updated"
+
+    rm -rf "$work_dir"
+
+    echo ""
+    echo -e "${Green}${Bold}✓ RealVNC Server installation completed${Reset}"
+    echo ""
+}
+
+# Install ETX Connection Node
+function install_etx_node() {
+    print_header "ETX Connection Node Installation"
+
+    local etx_cn_path="/opt/etx/cn"
+    local install_path="/opt/etx/packages"
+    local http_base="https://download.creekside.network/resource/apps/etx"
+    local http_user="downloader"
+    local http_pass="Khyp04682"
+    mkdir -p "$install_path"
+
+    if systemctl is-enabled otetxcn.service &>/dev/null; then
+        print_ok "ETX Connection Node already installed at $etx_cn_path"
+        return 0
+    fi
+
+    #---------------------------------------------------------------------------
+    print_step "1" "Checking Available Versions"
+    #---------------------------------------------------------------------------
+    local etx_versions=()
+    
+    # List version directories from HTTP directory listing (12.5.3, 12.5.4, etc.)
+    while read -r dirname; do
+        # Filter for version-like directories (e.g., 12.5.3, 12.5.4)
+        if [[ "$dirname" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            etx_versions+=("$dirname")
+        fi
+    done < <(curl --silent --user "$http_user:$http_pass" "$http_base/" 2>/dev/null | grep -oP 'href="\K[0-9]+\.[0-9]+\.[0-9]+(?=/")')
+
+    if [[ ${#etx_versions[@]} -eq 0 ]]; then
+        print_error "No ETX versions found"
+        return 1
+    fi
+
+    # Sort versions and show menu
+    IFS=$'\n' etx_versions=($(sort -V <<<"${etx_versions[*]}")); unset IFS
+    
+    echo ""
+    show_menu "Select ETX version" "${etx_versions[@]}"
+    local selected_version="${etx_versions[$menu_index]}"
+    print_info "Selected version: $selected_version"
+
+    #---------------------------------------------------------------------------
+    print_step "2" "Finding Linux Package"
+    #---------------------------------------------------------------------------
+    local etx_file=""
+    
+    # Look for linux-x64 package in ETXConnectionNode directory
+    # Try different possible paths based on directory structure
+    local search_paths=(
+        "$http_base/$selected_version/ETXConnectionNode/"
+        "$http_base/$selected_version/"
+    )
+    
+    for search_path in "${search_paths[@]}"; do
+        while read -r filename; do
+            if [[ "$filename" == *"linux-x64"* && "$filename" == *".tar.gz" ]]; then
+                etx_file="$filename"
+                print_info "Found package: $etx_file"
+                break 2
+            fi
+        done < <(curl --silent --user "$http_user:$http_pass" "$search_path" 2>/dev/null | grep -oP 'href="\K[^"]+linux-x64[^"]*\.tar\.gz')
+    done
+
+    if [[ -z "$etx_file" ]]; then
+        print_error "No Linux package found for version $selected_version"
+        return 1
+    fi
+
+    #---------------------------------------------------------------------------
+    print_step "3" "Downloading Package"
+    #---------------------------------------------------------------------------
+    local download_url="$http_base/$selected_version/ETXConnectionNode/$etx_file"
+    local install_file="$install_path/$etx_file"
+    
+    curl -# --user "$http_user:$http_pass" "$download_url" -o "$install_file"
+
+    if [[ ! -f "$install_file" ]] || [[ ! -s "$install_file" ]]; then
+        print_error "Download failed"
+        return 1
+    fi
+    print_ok "Downloaded: $etx_file"
+
+    #---------------------------------------------------------------------------
+    print_step "4" "Installing ETX Connection Node"
+    #---------------------------------------------------------------------------
+    mkdir -p "$etx_cn_path"
+    tar xzf "$install_file" --strip-components=1 -C "$etx_cn_path"
+
+    local work_dir=$(mktemp -d)
+    cat > "$work_dir/install_options" <<EOF
+install.etxcn.ListenPort=5510
+install.etxcn.StartNow=1
+install.etxcn.AllowMigrate=0
+install.etxcn.CreateETXProxyUser=0
+install.etxcn.CreateETXXstartUser=0
+install.service.createservice=1
+install.service.bBootStart=1
+install.register.bAutoRegister=0
+install.register.r_WebAdaptor=0
+install.register.WebAdaptorPort=5510
+install.register.r_auth=0
+install.register.r_appscan=0
+install.register.r_firstdisplay=1
+install.register.r_maxtotalsessions=30
+install.register.r_maxsessperuser=2
+install.register.r_allownewsess=1
+install.register.r_ssrconfig=0
+install.register.r_selinuxsetup=0
+install.register.r_vdinode=0
+EOF
+    "$etx_cn_path/bin/install" -s "$work_dir/install_options" &>/dev/null
+    print_ok "ETX Connection Node installed"
+
+    #---------------------------------------------------------------------------
+    print_step "5" "Configuring Authentication"
+    #---------------------------------------------------------------------------
+    cp /etc/pam.d/sshd /etc/pam.d/exceed-connection-node
+    print_ok "PAM authentication configured"
+
+    # Prevent core dumps
+    echo 'ulimit -c 0 > /dev/null 2>&1' > /etc/profile.d/disable-coredumps.sh
+    print_ok "Core dumps disabled"
+
+    #---------------------------------------------------------------------------
+    print_step "5" "Configuring Firewall"
+    #---------------------------------------------------------------------------
+    firewall-cmd -q --permanent --add-port=5510/tcp
+    firewall-cmd -q --reload
+    print_ok "Port 5510/tcp opened"
+
+    rm -rf "$work_dir"
+
+    echo ""
+    echo -e "${Green}${Bold}✓ ETX Connection Node installation completed${Reset}"
+    echo ""
+}
+
+# Install ETX Server
+function install_etx_server() {
+    print_header "ETX Server Installation"
+
+    local install_path="/opt/etx/packages"
+    local http_base="https://download.creekside.network/resource/apps/etx"
+    local http_user="downloader"
+    local http_pass="Khyp04682"
+    mkdir -p "$install_path"
+
+    if systemctl is-enabled otetxsvr.service &>/dev/null; then
+        print_ok "ETX Server already installed"
+        return 0
+    fi
+
+    local etx_admin_passwd="Good2Great"
+    local standalone="Y"
+
+    while true; do
+        echo ""
+        printf "  ${Cyan}1.${Reset} Standalone mode (N for cluster)? "
+        read -p "[Y/n]: " standalone_input
+        [[ "$standalone_input" =~ ^[Nn]$ ]] && standalone="N" || standalone="Y"
+
+        printf "  ${Cyan}2.${Reset} ETX admin password "
+        read -p "[$etx_admin_passwd]: " passwd_input
+        [[ -n "$passwd_input" ]] && etx_admin_passwd="$passwd_input"
+
+        local summary_items=(
+            "Mode:           $([ "$standalone" == "Y" ] && echo "Standalone" || echo "Cluster")"
+            "Admin Password: $etx_admin_passwd"
+        )
+        print_summary "ETX Server Configuration" "${summary_items[@]}"
+
+        echo ""
+        read -p "  Proceed with installation? [y/N]: " confirm
+        if [[ "$confirm" =~ ^[Yy]$ ]]; then
+            break
+        else
+            read -p "  Return to remote desktop menu? [y/N]: " return_menu
+            [[ "$return_menu" =~ ^[Yy]$ ]] && return
+        fi
+    done
+
+    #---------------------------------------------------------------------------
+    print_step "1" "Checking Available Versions"
+    #---------------------------------------------------------------------------
+    local etx_versions=()
+    
+    # List version directories (12.5.3, 12.5.4, etc.)
+    while read -r dirname; do
+        # Filter for version-like directories (e.g., 12.5.3, 12.5.4)
+        if [[ "$dirname" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            etx_versions+=("$dirname")
+        fi
+    done < <(curl --silent --user "$http_user:$http_pass" "$http_base/" 2>/dev/null | grep -oP 'href="\K[0-9]+\.[0-9]+\.[0-9]+(?=/")')
+
+    if [[ ${#etx_versions[@]} -eq 0 ]]; then
+        print_error "No ETX versions found"
+        return 1
+    fi
+
+    # Sort versions and show menu
+    IFS=$'\n' etx_versions=($(sort -V <<<"${etx_versions[*]}")); unset IFS
+    
+    echo ""
+    show_menu "Select ETX version" "${etx_versions[@]}"
+    local selected_version="${etx_versions[$menu_index]}"
+    print_info "Selected version: $selected_version"
+
+    #---------------------------------------------------------------------------
+    print_step "2" "Finding Linux Package"
+    #---------------------------------------------------------------------------
+    local etx_file=""
+    
+    # Look for linux-x64 package in ETXServer directory
+    local search_paths=(
+        "$http_base/$selected_version/ETXServer/"
+        "$http_base/$selected_version/"
+    )
+    
+    for search_path in "${search_paths[@]}"; do
+        while read -r filename; do
+            if [[ "$filename" == *"linux-x64"* && "$filename" == *".tar.gz" ]]; then
+                etx_file="$filename"
+                print_info "Found package: $etx_file"
+                break 2
+            fi
+        done < <(curl --silent --user "$http_user:$http_pass" "$search_path" 2>/dev/null | grep -oP 'href="\K[^"]+linux-x64[^"]*\.tar\.gz')
+    done
+
+    if [[ -z "$etx_file" ]]; then
+        print_error "No Linux package found for version $selected_version"
+        return 1
+    fi
+
+    #---------------------------------------------------------------------------
+    print_step "3" "Downloading Package"
+    #---------------------------------------------------------------------------
+    local download_url="$http_base/$selected_version/ETXServer/$etx_file"
+    local install_file="$install_path/$etx_file"
+    
+    curl -# --user "$http_user:$http_pass" "$download_url" -o "$install_file"
+
+    if [[ ! -f "$install_file" ]] || [[ ! -s "$install_file" ]]; then
+        print_error "Download failed"
+        return 1
+    fi
+    print_ok "Downloaded: $etx_file"
+
+    #---------------------------------------------------------------------------
+    print_step "4" "Installing ETX Server"
+    #---------------------------------------------------------------------------
+    local etx_svr_path="/opt/etx/svr"
+    mkdir -p "$etx_svr_path"
+    tar xzf "$install_file" --strip-components=1 -C "$etx_svr_path"
+
+    if [[ "$standalone" == "Y" ]]; then
+        "$etx_svr_path/bin/etxsvr" datastore init
+        "$etx_svr_path/bin/etxsvr" bootstart enable
+        "$etx_svr_path/bin/etxsvr" config eulaAccepted=1
+        "$etx_svr_path/bin/etxsvr" etxadmin setpasswd -p "$etx_admin_passwd"
+        print_ok "Standalone mode configured"
+    fi
+
+    #---------------------------------------------------------------------------
+    print_step "5" "Configuring Firewall"
+    #---------------------------------------------------------------------------
+    firewall-cmd -q --permanent --add-port={5510/tcp,5610/tcp,8080/tcp,8443/tcp}
+    firewall-cmd -q --reload
+    print_ok "Ports 5510,5610,8080,8443/tcp opened"
+
+    #---------------------------------------------------------------------------
+    print_step "6" "Starting ETX Server"
+    #---------------------------------------------------------------------------
+    "$etx_svr_path/bin/etxsvr" start
+    print_ok "ETX Server started"
+
+    echo ""
+    echo -e "${Green}${Bold}✓ ETX Server installation completed${Reset}"
+    echo ""
+}
+
+# Remote Desktop menu
+function install_remote_desktop() {
+    print_header "Remote Desktop Installation"
+
+    # Check if MATE desktop is installed
+    local mate_installed="N"
+    if command -v mate-session &>/dev/null; then
+        mate_installed="Y"
+        print_ok "MATE desktop detected"
+    else
+        print_warn "MATE desktop NOT installed"
+        print_info "Only ETX Server installation is available without desktop"
+    fi
+
+    while true; do
+        echo ""
+        if [[ "$mate_installed" == "Y" ]]; then
+            local rd_options=("xrdp (RDP protocol)" "RealVNC Server" "ETX Server" "ETX Connection Node" "Back to main menu")
+        else
+            local rd_options=("ETX Server" "Back to main menu")
+        fi
+
+        show_menu "Remote Desktop Options" "${rd_options[@]}"
+
+        if [[ "$mate_installed" == "Y" ]]; then
+            case $menu_index in
+                0) install_xrdp;;
+                1) install_realvnc;;
+                2) install_etx_server;;
+                3) install_etx_node;;
+                4) return;;
+            esac
+        else
+            case $menu_index in
+                0) install_etx_server;;
+                1) return;;
+            esac
+        fi
+    done
+}
+
 # Main program
 function main() {
     # Professional banner
@@ -1353,6 +2079,7 @@ function main() {
             "Update Repository Mirrors" 
             "Install Desktop Environment" 
             "Install Development Tools"
+            "Install Remote Desktop"
             "Configure Network"
             "Join Domain (AD/FreeIPA)"
             "Exit"
@@ -1364,9 +2091,10 @@ function main() {
             1) yum_configure_mirror;;
             2) install_desktop;;
             3) install_devtools;;
-            4) update_network_settings;;
-            5) enroll_domain;;
-            6) cleanup_existing;;
+            4) install_remote_desktop;;
+            5) update_network_settings;;
+            6) enroll_domain;;
+            7) cleanup_existing;;
         esac
     done
 }
