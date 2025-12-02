@@ -938,6 +938,32 @@ ENDOFCODE
         print_warn "/usr/bin/code not found for launch option patching"
     fi
 
+    #---------------------------------------------------------------------------
+    print_step "5" "Installing EDA (Electronic Design Automation) Packages"
+    #---------------------------------------------------------------------------
+    
+    # EDA packages for electronic design, simulation, and CAD tools
+    # Updated from CentOS 7 for Rocky 8/9 compatibility
+    local eda_packages=(
+        "gtkwave" "gdk-pixbuf2" "gdk-pixbuf2.i686" "gtk2" "gtk2.i686"
+        "gtk3" "gtk3.i686" "motif" "motif.i686" "libXpm" "libXpm.i686"
+        "libXScrnSaver" "libXScrnSaver.i686" "glibc.i686" "glibc-devel.i686"
+        "libstdc++.i686" "libgcc.i686" "libusb.i686" "krb5-libs.i686"
+        "libICE.i686" "libSM.i686" "libXau.i686" "libXext.i686" "libXft.i686"
+        "libXt.i686" "libXrender.i686" "libXcursor.i686" "libXrandr.i686"
+        "libmount.i686" "libsepol.i686" "graphite2.i686" "harfbuzz.i686"
+        "jbigkit-libs.i686" "jasper-libs.i686" "libvpx.i686"
+        "libwayland-client.i686" "libwayland-server.i686"
+        "libsigc++20" "libsigc++20-devel" "glibmm24" "glibmm24-devel"
+        "libmount-devel" "gperf" "webkit2gtk3" "webkit2gtk3-devel"
+        "libvpx" "libvpx-devel" "libwayland-client" "libwayland-server"
+        "mariadb-server" "mariadb" "php" "php-cli" "php-common" "libqb"
+        "ipmitool" "vsftpd" "links" "ntfs-3g" "gc" "gc-devel"
+    )
+
+    print_info "Installing ${#eda_packages[@]} EDA packages..."
+    install_applications "${eda_packages[@]}"
+
     echo ""
     echo -e "${Green}${Bold}✓ Development tools installation completed${Reset}"
     echo ""

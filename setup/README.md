@@ -8,6 +8,7 @@ A comprehensive, menu-driven setup and configuration utility for Rocky Linux 8 a
 - **Mirror Configuration**: Regional mirror selection for faster downloads (US, UK, China, UAE)
 - **Desktop Environments**: Install Xfce and MATE desktop environments with common applications
 - **Development Tools**: Install compilers, libraries, and development packages
+- **Remote Desktop**: Install xrdp, RealVNC Server, and Ericom ETX Server/Connection Node
 - **Network Configuration**: Configure interfaces, create bond interfaces, set static IPs
 - **Domain Enrollment**: Join Active Directory or FreeIPA domains with SSSD configuration
 
@@ -55,11 +56,11 @@ ssh -t 10.81.40.56 "$(<./rocky-setup.sh)"
 
 ## Main Menu Options
 
-### 1. Initialization
+### 1. System Initialization
 
 Performs complete system initialization:
 
-- Detects geographic location via IP geolocation
+- Detects geographic location via IP geolocation (defaults to USA if detection fails)
 - Configures timezone
 - Sets up yum proxy (optional)
 - Installs and configures EPEL repository
@@ -80,7 +81,7 @@ Performs complete system initialization:
   - Includes docker-buildx-plugin, docker-compose-plugin
   - Enables and starts Docker service automatically
 
-### 2. Update Yum Mirrors
+### 2. Update Repository Mirrors
 
 Update repository mirror URLs based on your region:
 
@@ -118,7 +119,41 @@ Installs development packages:
 - **Languages**: Python 3.9, Perl, Java 11 OpenJDK
 - **Kernel Development**: kernel-devel, kernel-headers
 
-### 5. Update Network Settings
+### 5. Install Remote Desktop
+
+Remote desktop installation submenu. Requires a desktop environment (Xfce, MATE, or GNOME) for xrdp and RealVNC options.
+
+#### xrdp (RDP Protocol)
+Installs and configures xrdp for Windows Remote Desktop connections:
+- TigerVNC backend
+- Configurable clipboard support
+- Configurable drive redirection (file sharing)
+- Firewall configuration for port 3389
+- SSSD integration for domain users
+
+#### RealVNC Server
+Installs RealVNC Server for virtual desktop mode:
+- License key configuration
+- Optional clipboard support
+- Optional file transfer support
+- Dummy video driver for 4K resolution support
+- PAM authentication configuration
+- Firewall configuration for VNC port 5999
+
+#### ETX Server
+Installs Ericom ETX Server:
+- Version selection from available releases
+- Standalone or cluster mode installation
+- Interactive or silent installation options
+- Downloads from HTTP resource server
+
+#### ETX Connection Node
+Installs Ericom ETX Connection Node:
+- Version selection from available releases
+- Silent installation mode
+- Downloads from HTTP resource server
+
+### 6. Configure Network
 
 Network configuration submenu:
 
@@ -151,7 +186,7 @@ Create bonded interfaces from multiple physical NICs:
 | balance-tlb | Adaptive transmit load balancing |
 | balance-alb | Adaptive load balancing |
 
-### 6. Join AD/FreeIPA Domain
+### 7. Join AD/FreeIPA Domain
 
 Enroll the system to a directory service:
 
@@ -207,6 +242,10 @@ The script generates/modifies these files:
 | `/etc/sudoers.d/90-ad-groups` | AD group sudo rules |
 | `/root/.ssh/authorized_keys` | SSH public keys |
 | `/root/.bashrc` | Proxy environment variables |
+| `/etc/xrdp/xrdp.ini` | xrdp configuration |
+| `/etc/xrdp/sesman.ini` | xrdp session manager |
+| `/etc/vnc/config.d/vncserver.custom` | RealVNC server configuration |
+| `/etc/vnc/config.d/common.custom` | RealVNC common settings |
 
 ## SSH Keys
 
@@ -242,6 +281,11 @@ Network configuration changes require a reboot:
 ```bash
 reboot
 ```
+
+### Remote desktop connection issues
+- **xrdp**: Ensure port 3389 is open, check `/var/log/xrdp.log`
+- **RealVNC**: Ensure license is valid, check port 5999 is open
+- **ETX**: Verify ETX Server is running with `systemctl status etx-server`
 
 ## License
 
