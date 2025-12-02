@@ -2007,19 +2007,27 @@ function install_etx_server() {
 function install_remote_desktop() {
     print_header "Remote Desktop Installation"
 
-    # Check if MATE desktop is installed
-    local mate_installed="N"
-    if command -v mate-session &>/dev/null; then
-        mate_installed="Y"
-        print_ok "MATE desktop detected"
+    # Check for desktop environment (priority: xfce4 -> mate -> gnome)
+    local desktop_name=""
+    
+    if command -v xfce4-session &>/dev/null; then
+        desktop_name="Xfce"
+    elif command -v mate-session &>/dev/null; then
+        desktop_name="MATE"
+    elif command -v gnome-session &>/dev/null; then
+        desktop_name="GNOME"
+    fi
+
+    if [[ -n "$desktop_name" ]]; then
+        print_ok "$desktop_name desktop detected"
     else
-        print_warn "MATE desktop NOT installed"
+        print_warn "No desktop environment detected (checked: Xfce, MATE, GNOME)"
         print_info "Only ETX Server installation is available without desktop"
     fi
 
     while true; do
         echo ""
-        if [[ "$mate_installed" == "Y" ]]; then
+        if [[ -n "$desktop_name" ]]; then
             local rd_options=("xrdp (RDP protocol)" "RealVNC Server" "ETX Server" "ETX Connection Node" "Back to main menu")
         else
             local rd_options=("ETX Server" "Back to main menu")
@@ -2027,7 +2035,7 @@ function install_remote_desktop() {
 
         show_menu "Remote Desktop Options" "${rd_options[@]}"
 
-        if [[ "$mate_installed" == "Y" ]]; then
+        if [[ -n "$desktop_name" ]]; then
             case $menu_index in
                 0) install_xrdp;;
                 1) install_realvnc;;
