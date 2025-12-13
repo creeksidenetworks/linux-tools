@@ -81,7 +81,7 @@ Performs complete system initialization:
   - Includes docker-buildx-plugin, docker-compose-plugin
   - Enables and starts Docker service automatically
 
-### 2. Update Repository Mirrors
+s### 2. Update Repository Mirrors
 
 Update repository mirror URLs based on your region:
 

@@ -409,7 +409,18 @@ EOF
     yum_configure_mirror
 
     #---------------------------------------------------------------------------
-    print_step "3" "Installing Essential Packages"
+    print_step "3" "Updating System Packages"
+    #---------------------------------------------------------------------------
+    
+    print_info "Running system update (this may take a few minutes)..."
+    if dnf update -y &>/dev/null; then
+        print_ok "System packages updated successfully"
+    else
+        print_warn "System update completed with some warnings"
+    fi
+
+    #---------------------------------------------------------------------------
+    print_step "4" "Installing Essential Packages"
     #---------------------------------------------------------------------------
     
     local default_packages=(
@@ -433,7 +444,7 @@ EOF
     install_applications "${default_packages[@]}"
 
     #---------------------------------------------------------------------------
-    print_step "4" "Installing Docker CE"
+    print_step "5" "Installing Docker CE"
     #---------------------------------------------------------------------------
     
     if command -v docker >/dev/null 2>&1; then
@@ -977,15 +988,24 @@ function update_network_settings() {
     print_info "Checking network management tools..."
     install_applications "${net_tools[@]}"
 
+    # Ensure NetworkManager is running
+    if ! systemctl is-active --quiet NetworkManager; then
+        systemctl enable NetworkManager &>/dev/null
+        systemctl start NetworkManager &>/dev/null
+        print_ok "NetworkManager service started"
+    fi
+
     while true; do
-        local net_options=("List network interfaces" "Configure interface" "Create bond interface" "Back to main menu")
+        local net_options=("List network interfaces" "Configure interface" "Rename interface" "Create bond interface" "Create VLAN interface" "Back to main menu")
         show_menu "Network Options" "${net_options[@]}"
 
         case $menu_index in
             0) list_network_interfaces;;
             1) configure_interface;;
-            2) create_bond_interface;;
-            3) return;;
+            2) rename_interface;;
+            3) create_bond_interface;;
+            4) create_vlan_interface;;
+            5) return;;
         esac
     done
 }
@@ -1019,7 +1039,29 @@ function list_network_interfaces() {
 }
 
 function get_interfaces_array() {
-    ip -o link show | awk -F': ' '{print $2}' | grep -v '^lo$' | sed 's/@.*//'
+    ip -o link show | awk -F': ' '{print $2}' | grep -v '^lo$' | grep -v '^docker' | grep -v '^br-' | sed 's/@.*//'
+}
+
+# Calculate default gateway (last usable IP in subnet)
+function calculate_default_gateway() {
+    local ip="$1"
+    local cidr="$2"
+    
+    # Convert IP to decimal
+    IFS=. read -r i1 i2 i3 i4 <<< "$ip"
+    local ip_dec=$((i1 * 256**3 + i2 * 256**2 + i3 * 256 + i4))
+    
+    # Calculate network mask
+    local mask_dec=$(( (0xFFFFFFFF << (32 - cidr)) & 0xFFFFFFFF ))
+    
+    # Calculate broadcast address (last IP in subnet)
+    local broadcast_dec=$(( (ip_dec & mask_dec) | (~mask_dec & 0xFFFFFFFF) ))
+    
+    # Gateway is broadcast - 1 (last usable IP)
+    local gateway_dec=$((broadcast_dec - 1))
+    
+    # Convert back to dotted notation
+    echo "$((gateway_dec >> 24 & 0xFF)).$((gateway_dec >> 16 & 0xFF)).$((gateway_dec >> 8 & 0xFF)).$((gateway_dec & 0xFF))"
 }
 
 # Prompt user for IP configuration (DHCP or Static)
@@ -1030,8 +1072,28 @@ function select_ip_config() {
     
     # Get current IP address if interface is provided
     if [[ -n "$iface" ]]; then
-        current_cidr=$(ip -4 addr show $iface 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}/\d+' | head -1)
-        current_ip="$current_cidr"
+        local cfg_file="/etc/sysconfig/network-scripts/ifcfg-$iface"
+        
+        # First check saved configuration file
+        if [[ -f "$cfg_file" ]]; then
+            local saved_ip=$(grep -E '^IPADDR=' "$cfg_file" | cut -d'=' -f2 | tr -d '"')
+            local saved_prefix=$(grep -E '^PREFIX=' "$cfg_file" | cut -d'=' -f2 | tr -d '"')
+            
+            if [[ -n "$saved_ip" ]]; then
+                if [[ -n "$saved_prefix" ]]; then
+                    current_ip="${saved_ip}/${saved_prefix}"
+                else
+                    current_ip="$saved_ip"
+                fi
+                current_cidr="$current_ip"
+            fi
+        fi
+        
+        # Fallback to runtime configuration if not in config file
+        if [[ -z "$current_ip" ]]; then
+            current_cidr=$(ip -4 addr show $iface 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}/\d+' | head -1)
+            current_ip="$current_cidr"
+        fi
     fi
     
     local ip_options=("DHCP" "Static IP")
@@ -1099,10 +1161,39 @@ function select_ip_config() {
             done
         fi
         
-        read -p "  Gateway (blank for none): " gateway
+        # Calculate default gateway (last usable IP in subnet)
+        local default_gateway=""
+        if [[ -n "$cidr" ]] && [[ "$cidr" =~ ^[0-9]+$ ]]; then
+            default_gateway=$(calculate_default_gateway "$ipaddr" "$cidr")
+        fi
+        
+        local gateway_prompt="  Gateway"
+        if [[ -n "$default_gateway" ]]; then
+            gateway_prompt+=" [$default_gateway] (- for none): "
+        else
+            gateway_prompt+=" (blank for none): "
+        fi
+        read -p "$gateway_prompt" gateway
+        
+        # Handle explicit "no gateway" with "-"
+        if [[ "$gateway" == "-" ]]; then
+            gateway=""
+        # Use calculated default if user pressed enter
+        elif [[ -z "$gateway" && -n "$default_gateway" ]]; then
+            gateway="$default_gateway"
+        fi
         
         if [[ -n "$gateway" ]]; then
-            read -p "  Primary DNS (blank for none): " dns1
+            local dns_prompt="  Primary DNS [$gateway] (- for none): "
+            read -p "$dns_prompt" dns1
+            
+            # Handle explicit "no DNS" with "-"
+            if [[ "$dns1" == "-" ]]; then
+                dns1=""
+            elif [[ -z "$dns1" ]]; then
+                dns1="$gateway"
+            fi
+            
             read -p "  Secondary DNS (blank for none): " dns2
         else
             dns1=""
@@ -1118,7 +1209,7 @@ function select_ip_config() {
     fi
 }
 
-# Configure a single network interface
+# Configure a single network interface using NetworkManager
 function configure_interface() {
     echo ""
     echo -e "${Bold}Configure Network Interface${Reset}"
@@ -1136,22 +1227,25 @@ function configure_interface() {
         return
     fi
     
+    interfaces+=("Return to network menu")
     show_menu "Select interface" "${interfaces[@]}"
+    
+    # Check if user selected return option
+    if [[ $menu_index -eq $((${#interfaces[@]} - 1)) ]]; then
+        return
+    fi
+    
     local selected_iface="${interfaces[$menu_index]}"
     local current_mtu=$(cat /sys/class/net/$selected_iface/mtu 2>/dev/null || echo "1500")
-    local script_file="/etc/sysconfig/network-scripts/ifcfg-$selected_iface"
+    local conn_name="$selected_iface"
+    
+    # Get existing connection name if it exists
+    local existing_conn=$(nmcli -t -f NAME,DEVICE connection show | grep ":$selected_iface$" | cut -d: -f1 | head -1)
+    [[ -n "$existing_conn" ]] && conn_name="$existing_conn"
     
     while true; do
         echo ""
         print_info "Configuring: $selected_iface"
-        
-        read -p "  New interface name [$selected_iface]: " new_name
-        [[ -z "$new_name" ]] && new_name="$selected_iface"
-        
-        if [[ ! "$new_name" =~ ^[a-zA-Z][a-zA-Z0-9_-]*$ ]]; then
-            print_warn "Invalid interface name"
-            continue
-        fi
         
         read -p "  MTU [$current_mtu]: " new_mtu
         [[ -z "$new_mtu" ]] && new_mtu="$current_mtu"
@@ -1165,7 +1259,7 @@ function configure_interface() {
         
         # Show summary
         local summary_items=(
-            "Interface:     $new_name"
+            "Interface:     $selected_iface"
             "MTU:           $new_mtu"
             "Boot Protocol: $bootproto"
         )
@@ -1191,44 +1285,155 @@ function configure_interface() {
         fi
     done
     
-    local mac_addr=$(cat /sys/class/net/$selected_iface/address 2>/dev/null)
-    local new_script_file="/etc/sysconfig/network-scripts/ifcfg-$new_name"
-    
-    [[ -f "$new_script_file" ]] && cp "$new_script_file" "${new_script_file}.bak.$(date +%Y%m%d_%H%M%S)"
-    [[ "$selected_iface" != "$new_name" && -f "$script_file" ]] && rm -f "$script_file"
-    
-    cat > "$new_script_file" <<EOF
-# Generated by rocky-setup.sh on $(date)
-TYPE=Ethernet
-PROXY_METHOD=none
-BROWSER_ONLY=no
-BOOTPROTO=$bootproto
-DEFROUTE=$defroute
-IPV4_FAILURE_FATAL=no
-IPV6INIT=no
-IPV6_AUTOCONF=no
-IPV6_DEFROUTE=no
-IPV6_FAILURE_FATAL=no
-IPV6_ADDR_GEN_MODE=default
-NAME=$new_name
-DEVICE=$new_name
-ONBOOT=yes
-MTU=$new_mtu
-EOF
-
-    [[ "$selected_iface" != "$new_name" && -n "$mac_addr" ]] && echo "HWADDR=$mac_addr" >> "$new_script_file"
-    
-    if [[ "$bootproto" == "none" ]]; then
-        echo "IPADDR=$ipaddr" >> "$new_script_file"
-        echo "NETMASK=$netmask" >> "$new_script_file"
-        [[ -n "$gateway" ]] && echo "GATEWAY=$gateway" >> "$new_script_file"
-        [[ -n "$dns1" ]] && echo "DNS1=$dns1" >> "$new_script_file"
-        [[ -n "$dns2" ]] && echo "DNS2=$dns2" >> "$new_script_file"
+    # Delete existing connection if it exists
+    if [[ -n "$existing_conn" ]]; then
+        nmcli connection delete "$existing_conn" &>/dev/null
     fi
     
-    chmod 644 "$new_script_file"
-    print_ok "Configuration saved: $new_script_file"
-    print_warn "Reboot required to apply changes"
+    # Create new connection using nmcli
+    if [[ "$bootproto" == "dhcp" ]]; then
+        nmcli connection add type ethernet con-name "$selected_iface" ifname "$selected_iface" \
+            ipv4.method auto \
+            ipv6.method disabled \
+            802-3-ethernet.mtu "$new_mtu" \
+            connection.autoconnect yes &>/dev/null
+    else
+        # Calculate prefix from netmask
+        local prefix=$(netmask_to_cidr "$netmask")
+        local ipv4_addr="${ipaddr}/${prefix}"
+        
+        if [[ -n "$gateway" ]]; then
+            local dns_servers="$dns1"
+            [[ -n "$dns2" ]] && dns_servers="$dns1 $dns2"
+            
+            nmcli connection add type ethernet con-name "$selected_iface" ifname "$selected_iface" \
+                ipv4.method manual \
+                ipv4.addresses "$ipv4_addr" \
+                ipv4.gateway "$gateway" \
+                ipv4.dns "$dns_servers" \
+                ipv6.method disabled \
+                802-3-ethernet.mtu "$new_mtu" \
+                connection.autoconnect yes &>/dev/null
+        else
+            nmcli connection add type ethernet con-name "$selected_iface" ifname "$selected_iface" \
+                ipv4.method manual \
+                ipv4.addresses "$ipv4_addr" \
+                ipv4.never-default yes \
+                ipv6.method disabled \
+                802-3-ethernet.mtu "$new_mtu" \
+                connection.autoconnect yes &>/dev/null
+        fi
+    fi
+    
+    # Activate the connection
+    nmcli connection up "$selected_iface" &>/dev/null
+    
+    print_ok "Configuration applied using NetworkManager"
+    print_info "Connection activated: $selected_iface"
+}
+
+# Convert netmask to CIDR prefix
+function netmask_to_cidr() {
+    local netmask="$1"
+    local cidr=0
+    IFS=. read -r i1 i2 i3 i4 <<< "$netmask"
+    local mask_dec=$((i1 * 256**3 + i2 * 256**2 + i3 * 256 + i4))
+    
+    while [[ $mask_dec -gt 0 ]]; do
+        ((cidr++))
+        mask_dec=$((mask_dec << 1 & 0xFFFFFFFF))
+    done
+    
+    echo "$cidr"
+}
+
+# Rename network interface
+function rename_interface() {
+    echo ""
+    echo -e "${Bold}Rename Network Interface${Reset}"
+    
+    local all_interfaces=($(get_interfaces_array))
+    local interfaces=()
+    
+    # Filter out bond slaves and virtual interfaces
+    for iface in "${all_interfaces[@]}"; do
+        [[ ! -d "/sys/class/net/$iface/master" ]] && [[ ! "$iface" =~ \. ]] && [[ ! "$iface" =~ ^bond ]] && interfaces+=("$iface")
+    done
+    
+    if [[ ${#interfaces[@]} -eq 0 ]]; then
+        print_warn "No renameable interfaces found"
+        return
+    fi
+    
+    interfaces+=("Return to network menu")
+    show_menu "Select interface to rename" "${interfaces[@]}"
+    
+    # Check if user selected return option
+    if [[ $menu_index -eq $((${#interfaces[@]} - 1)) ]]; then
+        return
+    fi
+    
+    local selected_iface="${interfaces[$menu_index]}"
+    local mac_addr=$(cat /sys/class/net/$selected_iface/address 2>/dev/null)
+    
+    echo ""
+    print_info "Current interface: $selected_iface (MAC: $mac_addr)"
+    
+    while true; do
+        read -p "  New interface name: " new_name
+        
+        if [[ -z "$new_name" ]]; then
+            print_warn "Interface name cannot be empty"
+            continue
+        fi
+        
+        if [[ "$new_name" == "$selected_iface" ]]; then
+            print_warn "New name is the same as current name"
+            return
+        fi
+        
+        if [[ ! "$new_name" =~ ^[a-zA-Z][a-zA-Z0-9_-]*$ ]]; then
+            print_warn "Invalid interface name (must start with letter, contain only alphanumeric, _, -)"
+            continue
+        fi
+        
+        if ip link show "$new_name" &>/dev/null; then
+            print_warn "Interface $new_name already exists"
+            continue
+        fi
+        
+        break
+    done
+    
+    echo ""
+    print_info "Renaming: $selected_iface → $new_name"
+    read -p "  Proceed with rename? [y/N]: " confirm
+    
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        return
+    fi
+    
+    # Create udev rule for persistent naming
+    local udev_rule="/etc/udev/rules.d/70-persistent-net-${new_name}.rules"
+    cat > "$udev_rule" <<EOF
+# Generated by rocky-setup.sh on $(date)
+# Rename $selected_iface to $new_name based on MAC address
+SUBSYSTEM=="net", ACTION=="add", ATTR{address}=="$mac_addr", NAME="$new_name"
+EOF
+    
+    chmod 644 "$udev_rule"
+    print_ok "Udev rule created: $udev_rule"
+    
+    # Update NetworkManager connection if it exists
+    local existing_conn=$(nmcli -t -f NAME,DEVICE connection show | grep ":$selected_iface$" | cut -d: -f1 | head -1)
+    if [[ -n "$existing_conn" ]]; then
+        nmcli connection modify "$existing_conn" connection.interface-name "$new_name" &>/dev/null
+        nmcli connection modify "$existing_conn" connection.id "$new_name" &>/dev/null
+        print_ok "NetworkManager connection updated"
+    fi
+    
+    print_warn "Reboot required to apply interface rename"
+    echo ""
 }
 
 # Create a bonded network interface
@@ -1257,16 +1462,25 @@ function create_bond_interface() {
         local state=$(cat /sys/class/net/$iface/operstate 2>/dev/null || echo "N/A")
         printf "  ${Cyan}%d)${Reset} %-10s MAC: %-18s State: %s\n" "$((i+1))" "$iface" "$mac" "$state"
     done
+    printf "  ${Cyan}0)${Reset} Return to network menu\n"
     
     while true; do
         echo ""
-        read -p "  Bond interface name (e.g., bond0): " bond_name
-        if [[ ! "$bond_name" =~ ^bond[0-9]+$ ]]; then
+        read -p "  Bond interface name (e.g., bond0, or 0 to return): " bond_name
+        
+        # Check for return option
+        if [[ "$bond_name" == "0" ]]; then
+            return
+        fi
+        if [[ "$bond_name" == "0" ]]; then
+            return
+        elif [[ ! "$bond_name" =~ ^bond[0-9]+$ ]]; then
             print_warn "Bond name format: bondX (e.g., bond0, bond1)"
             continue
         fi
         
-        if [[ -f "/etc/sysconfig/network-scripts/ifcfg-$bond_name" ]]; then
+        # Check if bond connection already exists in NetworkManager
+        if nmcli connection show "$bond_name" &>/dev/null; then
             print_warn "Bond $bond_name already exists"
             continue
         fi
@@ -1338,73 +1552,221 @@ function create_bond_interface() {
         fi
     done
     
-    # Create bond configuration
-    local bond_file="/etc/sysconfig/network-scripts/ifcfg-$bond_name"
+    # Create bond using NetworkManager
+    local bond_mode_param=""
+    case $bond_mode in
+        "balance-rr") bond_mode_param="balance-rr";;
+        "active-backup") bond_mode_param="active-backup";;
+        "balance-xor") bond_mode_param="balance-xor";;
+        "broadcast") bond_mode_param="broadcast";;
+        "802.3ad") bond_mode_param="802.3ad";;
+        "balance-tlb") bond_mode_param="balance-tlb";;
+        "balance-alb") bond_mode_param="balance-alb";;
+    esac
     
-    cat > "$bond_file" <<EOF
-# Generated by rocky-setup.sh on $(date)
-TYPE=Bond
-BONDING_MASTER=yes
-NAME=$bond_name
-DEVICE=$bond_name
-ONBOOT=yes
-BOOTPROTO=$bootproto
-DEFROUTE=$defroute
-IPV4_FAILURE_FATAL=no
-IPV6INIT=no
-IPV6_AUTOCONF=no
-IPV6_DEFROUTE=no
-IPV6_FAILURE_FATAL=no
-IPV6_ADDR_GEN_MODE=default
-MTU=$bond_mtu
-BONDING_OPTS="mode=$bond_mode $bond_opts"
-EOF
-    
-    if [[ "$bootproto" == "none" ]]; then
-        echo "IPADDR=$ipaddr" >> "$bond_file"
-        echo "NETMASK=$netmask" >> "$bond_file"
-        [[ -n "$gateway" ]] && echo "GATEWAY=$gateway" >> "$bond_file"
-        [[ -n "$dns1" ]] && echo "DNS1=$dns1" >> "$bond_file"
-        [[ -n "$dns2" ]] && echo "DNS2=$dns2" >> "$bond_file"
+    # Create bond connection
+    if [[ "$bootproto" == "dhcp" ]]; then
+        nmcli connection add type bond con-name "$bond_name" ifname "$bond_name" \
+            bond.options "mode=$bond_mode_param,miimon=100" \
+            ipv4.method auto \
+            ipv6.method disabled \
+            802-3-ethernet.mtu "$bond_mtu" \
+            connection.autoconnect yes &>/dev/null
+    else
+        local prefix=$(netmask_to_cidr "$netmask")
+        local ipv4_addr="${ipaddr}/${prefix}"
+        
+        if [[ -n "$gateway" ]]; then
+            local dns_servers="$dns1"
+            [[ -n "$dns2" ]] && dns_servers="$dns1 $dns2"
+            
+            nmcli connection add type bond con-name "$bond_name" ifname "$bond_name" \
+                bond.options "mode=$bond_mode_param,miimon=100" \
+                ipv4.method manual \
+                ipv4.addresses "$ipv4_addr" \
+                ipv4.gateway "$gateway" \
+                ipv4.dns "$dns_servers" \
+                ipv6.method disabled \
+                802-3-ethernet.mtu "$bond_mtu" \
+                connection.autoconnect yes &>/dev/null
+        else
+            nmcli connection add type bond con-name "$bond_name" ifname "$bond_name" \
+                bond.options "mode=$bond_mode_param,miimon=100" \
+                ipv4.method manual \
+                ipv4.addresses "$ipv4_addr" \
+                ipv4.never-default yes \
+                ipv6.method disabled \
+                802-3-ethernet.mtu "$bond_mtu" \
+                connection.autoconnect yes &>/dev/null
+        fi
     fi
     
-    chmod 644 "$bond_file"
-    print_ok "Bond config: $bond_file"
+    print_ok "Bond $bond_name created"
     
-    # Create slave configurations
+    # Add slave interfaces to bond
     for slave in "${slaves[@]}"; do
-        local slave_file="/etc/sysconfig/network-scripts/ifcfg-$slave"
-        local slave_mac=$(cat /sys/class/net/$slave/address 2>/dev/null)
+        # Delete existing connection for slave if it exists
+        local existing_conn=$(nmcli -t -f NAME,DEVICE connection show | grep ":$slave$" | cut -d: -f1 | head -1)
+        [[ -n "$existing_conn" ]] && nmcli connection delete "$existing_conn" &>/dev/null
         
-        [[ -f "$slave_file" ]] && cp "$slave_file" "${slave_file}.bak.$(date +%Y%m%d_%H%M%S)"
+        # Add slave to bond
+        nmcli connection add type ethernet con-name "$bond_name-$slave" ifname "$slave" \
+            master "$bond_name" \
+            connection.autoconnect yes &>/dev/null
         
-        cat > "$slave_file" <<EOF
-# Generated by rocky-setup.sh on $(date)
-TYPE=Ethernet
-NAME=$slave
-DEVICE=$slave
-ONBOOT=yes
-BOOTPROTO=none
-MASTER=$bond_name
-SLAVE=yes
-MTU=$bond_mtu
-IPV6INIT=no
-IPV6_AUTOCONF=no
-EOF
-        
-        [[ -n "$slave_mac" ]] && echo "HWADDR=$slave_mac" >> "$slave_file"
-        chmod 644 "$slave_file"
-        print_ok "Slave config: $slave_file"
+        print_ok "Added slave: $slave"
     done
     
-    # Load bonding module
-    if ! lsmod | grep -q "^bonding"; then
-        modprobe bonding
-        echo "bonding" > /etc/modules-load.d/bonding.conf
-        print_ok "Bonding module loaded"
+    # Activate the bond
+    nmcli connection up "$bond_name" &>/dev/null
+    
+    print_ok "Bond configuration applied using NetworkManager"
+    print_info "Bond activated: $bond_name"
+    echo ""
+}
+
+# Create a VLAN interface
+function create_vlan_interface() {
+    echo ""
+    echo -e "${Bold}Create VLAN Interface${Reset}"
+    
+    local all_interfaces=($(get_interfaces_array))
+    local available_interfaces=()
+    
+    # Get all non-VLAN interfaces (physical, bond, etc.)
+    for iface in "${all_interfaces[@]}"; do
+        [[ ! "$iface" =~ \. ]] && available_interfaces+=("$iface")
+    done
+    
+    if [[ ${#available_interfaces[@]} -eq 0 ]]; then
+        print_warn "No interfaces found for VLAN tagging"
+        return
     fi
     
-    print_warn "Reboot required to apply changes"
+    echo ""
+    echo -e "${Dim}Available interfaces for VLAN tagging:${Reset}"
+    for i in "${!available_interfaces[@]}"; do
+        local iface="${available_interfaces[$i]}"
+        local mac=$(cat /sys/class/net/$iface/address 2>/dev/null || echo "N/A")
+        local state=$(cat /sys/class/net/$iface/operstate 2>/dev/null || echo "N/A")
+        printf "  ${Cyan}%d)${Reset} %-10s MAC: %-18s State: %s\n" "$((i+1))" "$iface" "$mac" "$state"
+    done
+    printf "  ${Cyan}0)${Reset} Return to network menu\n"
+    
+    while true; do
+        echo ""
+        read -p "  Select parent interface number [1-${#available_interfaces[@]}, or 0 to return]: " iface_num
+        
+        # Check for return option
+        if [[ "$iface_num" == "0" ]]; then
+            return
+        fi
+        
+        if ! [[ "$iface_num" =~ ^[0-9]+$ ]] || (( iface_num < 1 || iface_num > ${#available_interfaces[@]} )); then
+            print_warn "Invalid selection"
+            continue
+        fi
+        
+        local parent_iface="${available_interfaces[$((iface_num-1))]}"
+        
+        read -p "  VLAN ID (1-4094): " vlan_id
+        
+        if ! [[ "$vlan_id" =~ ^[0-9]+$ ]] || (( vlan_id < 1 || vlan_id > 4094 )); then
+            print_warn "Invalid VLAN ID (must be 1-4094)"
+            continue
+        fi
+        
+        local vlan_name="${parent_iface}.${vlan_id}"
+        
+        if [[ -f "/etc/sysconfig/network-scripts/ifcfg-$vlan_name" ]]; then
+            print_warn "VLAN interface $vlan_name already exists"
+            continue
+        fi
+        
+        read -p "  MTU [1500]: " vlan_mtu
+        [[ -z "$vlan_mtu" ]] && vlan_mtu="1500"
+        
+        if ! [[ "$vlan_mtu" =~ ^[0-9]+$ ]] || (( vlan_mtu < 576 || vlan_mtu > 9000 )); then
+            print_warn "Invalid MTU (576-9000)"
+            continue
+        fi
+        
+        select_ip_config
+        
+        # Show summary
+        local summary_items=(
+            "VLAN Interface: $vlan_name"
+            "Parent Interface: $parent_iface"
+            "VLAN ID:        $vlan_id"
+            "MTU:            $vlan_mtu"
+            "Boot Protocol:  $bootproto"
+        )
+        [[ "$bootproto" == "none" ]] && summary_items+=(
+            "IP Address:     $ipaddr"
+            "Netmask:        $netmask"
+        )
+        [[ -n "$gateway" ]] && summary_items+=("Gateway:        $gateway")
+        [[ -n "$dns1" ]] && summary_items+=("DNS1:           $dns1")
+        [[ -n "$dns2" ]] && summary_items+=("DNS2:           $dns2")
+        summary_items+=("Default Route:  $defroute")
+        
+        print_summary "VLAN Configuration" "${summary_items[@]}"
+        
+        echo ""
+        read -p "  Create this VLAN? [y/N]: " confirm
+        if [[ "$confirm" =~ ^[Yy]$ ]]; then
+            break
+        else
+            read -p "  Return to network menu? [y/N]: " return_menu
+            [[ "$return_menu" =~ ^[Yy]$ ]] && return
+        fi
+    done
+    
+    # Create VLAN using NetworkManager
+    if [[ "$bootproto" == "dhcp" ]]; then
+        nmcli connection add type vlan con-name "$vlan_name" ifname "$vlan_name" \
+            dev "$parent_iface" \
+            id "$vlan_id" \
+            ipv4.method auto \
+            ipv6.method disabled \
+            802-3-ethernet.mtu "$vlan_mtu" \
+            connection.autoconnect yes &>/dev/null
+    else
+        local prefix=$(netmask_to_cidr "$netmask")
+        local ipv4_addr="${ipaddr}/${prefix}"
+        
+        if [[ -n "$gateway" ]]; then
+            local dns_servers="$dns1"
+            [[ -n "$dns2" ]] && dns_servers="$dns1 $dns2"
+            
+            nmcli connection add type vlan con-name "$vlan_name" ifname "$vlan_name" \
+                dev "$parent_iface" \
+                id "$vlan_id" \
+                ipv4.method manual \
+                ipv4.addresses "$ipv4_addr" \
+                ipv4.gateway "$gateway" \
+                ipv4.dns "$dns_servers" \
+                ipv6.method disabled \
+                802-3-ethernet.mtu "$vlan_mtu" \
+                connection.autoconnect yes &>/dev/null
+        else
+            nmcli connection add type vlan con-name "$vlan_name" ifname "$vlan_name" \
+                dev "$parent_iface" \
+                id "$vlan_id" \
+                ipv4.method manual \
+                ipv4.addresses "$ipv4_addr" \
+                ipv4.never-default yes \
+                ipv6.method disabled \
+                802-3-ethernet.mtu "$vlan_mtu" \
+                connection.autoconnect yes &>/dev/null
+        fi
+    fi
+    
+    # Activate the VLAN
+    nmcli connection up "$vlan_name" &>/dev/null
+    
+    print_ok "VLAN configuration applied using NetworkManager"
+    print_info "VLAN activated: $vlan_name"
     echo ""
 }
 
