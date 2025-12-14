@@ -101,14 +101,16 @@ TIMEZONE="UTC"
 # EPEL_MIRRORS: Extra Packages for Enterprise Linux mirrors
 declare -A BASE_MIRRORS
 declare -A EPEL_MIRRORS
-BASE_MIRRORS["US"]="https://dl.rockylinux.org/pub/rocky"
+BASE_MIRRORS["US"]="http://dl.rockylinux.org"
 EPEL_MIRRORS["US"]="http://dl.fedoraproject.org/pub/epel"
-BASE_MIRRORS["CN"]="https://mirrors.nju.edu.cn/rocky"
+BASE_MIRRORS["CN"]="https://mirrors.nju.edu.cn"
 EPEL_MIRRORS["CN"]="https://mirrors.nju.edu.cn/epel"
-BASE_MIRRORS["GB"]="http://rockylinux.mirrorservice.org/pub/rocky"
+BASE_MIRRORS["GB"]="http://rockylinux.mirrorservice.org"
 EPEL_MIRRORS["GB"]="https://www.mirrorservice.org/pub/epel"
-BASE_MIRRORS["AE"]="https://mirror.ourhost.az/rockylinux/"
-EPEL_MIRRORS["AE"]="https://mirror.yer.az/fedora-epel/"
+BASE_MIRRORS["AE"]="http://dl.rockylinux.org"
+EPEL_MIRRORS["AE"]="http://dl.fedoraproject.org/pub/epel"
+#BASE_MIRRORS["AE"]="https://mirror.ourhost.az/rockylinux/"
+#EPEL_MIRRORS["AE"]="https://mirror.yer.az/fedora-epel/"
 
 # Create temporary file for script operations and ensure cleanup on exit
 tmp_file=$(mktemp /tmp/rocky-setup.XXXXXX)
@@ -169,12 +171,21 @@ function add_root_ssh_keys() {
 # Generic menu function - displays numbered options and captures user selection
 # Arguments:
 #   $1: Menu title
+#   $2: Default option (1-based index, optional)
 #   $@: Menu options (remaining arguments)
 # Sets global variable:
 #   menu_index: 0-based index of selected option
 function show_menu() {
     local title="$1"
     shift
+    local default_choice=0
+    
+    # Check if second argument is a number (default choice)
+    if [[ "$1" =~ ^[0-9]+$ ]]; then
+        default_choice=$1
+        shift
+    fi
+    
     local options=("$@")
     echo ""
     echo -e "${Green}${Bold}$title${Reset}"
@@ -182,10 +193,23 @@ function show_menu() {
         printf "  ${Cyan}%d)${Reset} %s\n" "$((i+1))" "${options[$i]}"
     done
     echo ""
-    echo -n "  Select [1-${#options[@]}]: "
+    if [[ $default_choice -gt 0 ]]; then
+        echo -n "  Select [$default_choice]: "
+    else
+        echo -n "  Select: "
+    fi
     read user_choice
+    
+    # Use default if empty or invalid input
+    if [[ -z "$user_choice" ]]; then
+        user_choice=$default_choice
+    fi
     if ! [[ "$user_choice" =~ ^[0-9]+$ ]] || (( user_choice < 1 || user_choice > ${#options[@]} )); then
-        user_choice=${#options[@]}
+        if [[ $default_choice -gt 0 ]]; then
+            user_choice=$default_choice
+        else
+            user_choice=${#options[@]}
+        fi
     fi
     menu_index=$((user_choice-1))
 }
@@ -211,26 +235,118 @@ function detect_location() {
     export COUNTRY TIMEZONE
 }
 
+# Interactive menu to select country for yum mirror
+# Detects current location and offers it as default
+function select_mirror_country() {
+    # Auto-detect location first
+    detect_location
+    local detected_country="$COUNTRY"
+    
+    # Find the index of detected country
+    local default_index=0
+    for i in "${!countries[@]}"; do
+        if [[ "${countries[$i]}" == "$detected_country" ]]; then
+            default_index=$i
+            break
+        fi
+    done
+    
+    # Build menu options
+    local menu_options=()
+    for i in "${!countries[@]}"; do
+        local country_code="${countries[$i]}"
+        local region_name="${regions[$i]}"
+        local mirror_url="${BASE_MIRRORS[$country_code]}"
+        
+        if [[ "$country_code" == "$detected_country" ]]; then
+            menu_options+=("$region_name ($country_code) - $mirror_url [detected]")
+        else
+            menu_options+=("$region_name ($country_code) - $mirror_url")
+        fi
+    done
+    
+    # Show menu with detected country as default
+    show_menu "Select Yum Mirror Country:" "$((default_index+1))" "${menu_options[@]}"
+    
+    # Use selected country
+    COUNTRY="${countries[$menu_index]}"
+    
+    export COUNTRY
+    echo -e "${Green}✓${Reset} Selected mirror country: $COUNTRY (${regions[$menu_index]})\n"
+}
+
 # Configure yum repository mirrors based on detected/selected country
 # Updates both Rocky Linux base repos and EPEL repos
 function yum_configure_mirror() {
-    # Auto-select mirror based on country
-    baseos_url="${BASE_MIRRORS[$COUNTRY]:-US}"
-    epel_url="${EPEL_MIRRORS[$COUNTRY]:-US}"
+    # Let user select mirror country (with auto-detection as default)
+    select_mirror_country
+    echo "  Configuring yum repositories for $COUNTRY"
+    baseos_url="${BASE_MIRRORS[$COUNTRY]}"
+    epel_url="${EPEL_MIRRORS[$COUNTRY]}"
+    
+    # Fallback to US if country not found in mirrors
+    if [[ -z "$baseos_url" ]]; then
+        baseos_url="${BASE_MIRRORS[US]}"
+        epel_url="${EPEL_MIRRORS[US]}"
+    fi
 
-    # Update Rocky repos
+    # Update Rocky repos - need to handle BaseOS, AppStream, extras, etc.
     shopt -s nocaseglob
-    for repo in /etc/yum.repos.d/Rocky*.repo; do
-        sed -i -E "s%^([[:space:]]*)#?([[:space:]]*)baseurl=http.*contentdir%baseurl=${baseos_url}%" "$repo"
-        sed -i 's/^mirrorlist=/#mirrorlist=/' "$repo"
+    for repo in /etc/yum.repos.d/rocky*.repo; do
+        [[ ! -f "$repo" ]] && continue
+        
+        # Use awk to process the file and update baseurl based on the section
+        awk -v mirror="${baseos_url}" '
+        /^\[baseos\]/ { section="baseos" }
+        /^\[appstream\]/ { section="appstream" }
+        /^\[extras\]/ { section="extras" }
+        /^\[crb\]/ { section="crb" }
+        /^\[powertools\]/ { section="powertools" }
+        /^\[highavailability\]/ { section="highavailability" }
+        /^\[resilientstorage\]/ { section="resilientstorage" }
+        /^\[rt\]/ { section="rt" }
+        /^\[nfv\]/ { section="nfv" }
+        /^\[sap\]/ { section="sap" }
+        /^\[saphana\]/ { section="saphana" }
+        /^\[devel\]/ { section="devel" }
+        /^\[plus\]/ { section="plus" }
+        /^#?baseurl=/ {
+            if (section == "baseos") print "baseurl=" mirror "/$contentdir/$releasever/BaseOS/$basearch/os/"
+            else if (section == "appstream") print "baseurl=" mirror "/$contentdir/$releasever/AppStream/$basearch/os/"
+            else if (section == "extras") print "baseurl=" mirror "/$contentdir/$releasever/extras/$basearch/os/"
+            else if (section == "crb") print "baseurl=" mirror "/$contentdir/$releasever/CRB/$basearch/os/"
+            else if (section == "powertools") print "baseurl=" mirror "/$contentdir/$releasever/PowerTools/$basearch/os/"
+            else if (section == "highavailability") print "baseurl=" mirror "/$contentdir/$releasever/HighAvailability/$basearch/os/"
+            else if (section == "resilientstorage") print "baseurl=" mirror "/$contentdir/$releasever/ResilientStorage/$basearch/os/"
+            else if (section == "rt") print "baseurl=" mirror "/$contentdir/$releasever/RT/$basearch/os/"
+            else if (section == "nfv") print "baseurl=" mirror "/$contentdir/$releasever/NFV/$basearch/os/"
+            else if (section == "sap") print "baseurl=" mirror "/$contentdir/$releasever/SAP/$basearch/os/"
+            else if (section == "saphana") print "baseurl=" mirror "/$contentdir/$releasever/SAPHANA/$basearch/os/"
+            else if (section == "devel") print "baseurl=" mirror "/$contentdir/$releasever/devel/$basearch/os/"
+            else if (section == "plus") print "baseurl=" mirror "/$contentdir/$releasever/plus/$basearch/os/"
+            else print
+            next
+        }
+        /^mirrorlist=/ { print "#" $0; next }
+        { print }
+        ' "$repo" > "$repo.tmp" && mv "$repo.tmp" "$repo"
     done
     shopt -u nocaseglob
     print_ok "Rocky Linux repos → $baseos_url"
 
-    # Update EPEL repo
+    # Update EPEL repos
     for repo in /etc/yum.repos.d/epel*.repo; do
-        sed -i -E "s%^([[:space:]]*)#?([[:space:]]*)baseurl=http.*epel%baseurl=${epel_url}%" "$repo"
-        sed -i 's/^metalink=/#metalink=/' "$repo"
+        [[ ! -f "$repo" ]] && continue
+        
+        # Handle cisco-openh264 repo separately (uses different URL structure)
+        if grep -q "epel-cisco-openh264" "$repo"; then
+            sed -i -E 's|^#?baseurl=.*|baseurl=http://codecs.fedoraproject.org/openh264/$releasever/$basearch/|' "$repo"
+            sed -i -E 's/^(metalink=.*)/#\1/' "$repo"
+        else
+            # Standard EPEL repos
+            sed -i -E 's|^#?baseurl=.*|baseurl='"${epel_url}"'/$releasever/Everything/$basearch/|' "$repo"
+            sed -i -E 's/^(metalink=.*)/#\1/' "$repo"
+        fi
     done
     print_ok "EPEL repos → $epel_url"
 }
