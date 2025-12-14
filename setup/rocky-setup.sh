@@ -601,6 +601,55 @@ EOF
     fi
 
     #---------------------------------------------------------------------------
+    print_step "6" "Installing Python 3.9+"
+    #---------------------------------------------------------------------------
+    
+    # Check current Python 3 version
+    current_python=""
+    if command -v python3 >/dev/null 2>&1; then
+        current_python=$(python3 --version 2>&1 | awk '{print $2}')
+        python_major=$(echo "$current_python" | cut -d. -f1)
+        python_minor=$(echo "$current_python" | cut -d. -f2)
+        
+        if [[ "$python_major" -ge 3 && "$python_minor" -ge 9 ]]; then
+            print_ok "Python $current_python already installed"
+        else
+            print_info "Current Python $current_python is older than 3.9"
+        fi
+    fi
+    
+    # Install Python 3.11 (latest stable available in repos)
+    if ! command -v python3.11 >/dev/null 2>&1; then
+        print_info "Installing Python 3.11..."
+        if dnf install -y python3.11 python3.11-pip python3.11-devel &>/dev/null; then
+            print_ok "Python 3.11 installed"
+            print_info "Use 'python3.11' or 'pip3.11' to access Python 3.11"
+        else
+            print_warn "Failed to install Python 3.11, trying Python 3.9..."
+            if dnf install -y python3.9 python3.9-pip python3.9-devel &>/dev/null; then
+                print_ok "Python 3.9 installed"
+                print_info "Use 'python3.9' or 'pip3.9' to access Python 3.9"
+            else
+                print_error "Failed to install Python 3.9+"
+            fi
+        fi
+    else
+        print_ok "Python 3.11 already installed"
+    fi
+    
+    # Note: We don't change system python3 to avoid breaking system tools like ipa-client-install
+    # Users can manually set alternatives or use python3.11/python3.9 directly
+    
+    # Display available Python versions
+    if command -v python3.11 >/dev/null 2>&1; then
+        py_version=$(python3.11 --version 2>&1)
+        print_ok "$py_version available as python3.11"
+    elif command -v python3.9 >/dev/null 2>&1; then
+        py_version=$(python3.9 --version 2>&1)
+        print_ok "$py_version available as python3.9"
+    fi
+
+    #---------------------------------------------------------------------------
     echo ""
     echo -e "${Green}${Bold}✓ Initialization completed successfully${Reset}"
     echo ""
@@ -1167,7 +1216,7 @@ function calculate_default_gateway() {
     IFS=. read -r i1 i2 i3 i4 <<< "$ip"
     local ip_dec=$((i1 * 256**3 + i2 * 256**2 + i3 * 256 + i4))
     
-    # Calculate network mask
+    # Calculate network mask using bit shifting
     local mask_dec=$(( (0xFFFFFFFF << (32 - cidr)) & 0xFFFFFFFF ))
     
     # Calculate broadcast address (last IP in subnet)
