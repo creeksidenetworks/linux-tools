@@ -2953,20 +2953,16 @@ EOF
     print_step "4" "Configuring PAM Authentication"
     #---------------------------------------------------------------------------
     # Create PAM configuration for TurboVNC (must match pam-service-name)
+    # Simplified config that works with domain users and remote VNC logins
     cat > /etc/pam.d/turbovnc <<EOF
 #%PAM-1.0
 # PAM configuration for TurboVNC
-# Uses system authentication (works with SSSD/FreeIPA/AD)
-auth       required     pam_sepermit.so
+# Works with SSSD/FreeIPA/AD domain users
 auth       substack     password-auth
 auth       include      postlogin
 account    required     pam_nologin.so
 account    include      password-auth
 password   include      password-auth
-session    required     pam_selinux.so close
-session    required     pam_loginuid.so
-session    optional     pam_console.so
-session    required     pam_selinux.so open
 session    optional     pam_keyinit.so force revoke
 session    include      password-auth
 EOF
@@ -3097,7 +3093,7 @@ EOF
 
 CONFIG_FILE="/opt/TurboVNC/config/vncuser.conf"
 STATE_FILE="/opt/TurboVNC/config/.session_state"
-WM="\$selected_session"
+WM="$selected_session"
 LOG_FILE="/var/log/turbovnc-sessions.log"
 
 # Global clipboard defaults (configured during installation)
@@ -3110,12 +3106,12 @@ GLOBAL_PASTE="GLOBAL_PASTE_PLACEHOLDER"
 declare -A user_clipboard
 
 log_msg() {
-    echo "\$(date '+%Y-%m-%d %H:%M:%S') \$1" | tee -a "\$LOG_FILE"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') $1" | tee -a "$LOG_FILE"
 }
 
 # Check if config file exists
-if [[ ! -f "\$CONFIG_FILE" ]]; then
-    log_msg "ERROR: Config file not found: \$CONFIG_FILE"
+if [[ ! -f "$CONFIG_FILE" ]]; then
+    log_msg "ERROR: Config file not found: $CONFIG_FILE"
     exit 1
 fi
 
@@ -3123,141 +3119,141 @@ log_msg "Starting TurboVNC session manager..."
 
 # Load previous session state (display -> username mapping)
 declare -A previous_state
-if [[ -f "\$STATE_FILE" ]]; then
+if [[ -f "$STATE_FILE" ]]; then
     while IFS=: read -r display username; do
-        previous_state["\$display"]="\$username"
-    done < "\$STATE_FILE"
+        previous_state["$display"]="$username"
+    done < "$STATE_FILE"
 fi
 
 # Parse config file and build desired state
 declare -A desired_sessions
 while IFS= read -r line; do
     # Skip comments and empty lines
-    [[ "\$line" =~ ^[[:space:]]*# ]] && continue
-    [[ -z "\$line" || "\$line" =~ ^[[:space:]]*\$ ]] && continue
+    [[ "$line" =~ ^[[:space:]]*# ]] && continue
+    [[ -z "$line" || "$line" =~ ^[[:space:]]*$ ]] && continue
     
     # Parse line: username : display_id [: copy] [: paste]
-    IFS=':' read -ra parts <<< "\$line"
+    IFS=':' read -ra parts <<< "$line"
     
     # Get username and display_id (required)
-    username=\$(echo "\${parts[0]}" | xargs)
-    display_id=\$(echo "\${parts[1]}" | xargs)
+    username=$(echo "${parts[0]}" | xargs)
+    display_id=$(echo "${parts[1]}" | xargs)
     
     # Validate display_id is a number
-    if [[ ! "\$display_id" =~ ^[0-9]+\$ ]]; then
-        log_msg "WARNING: Invalid display ID for user \$username: \$display_id (skipping)"
+    if [[ ! "$display_id" =~ ^[0-9]+$ ]]; then
+        log_msg "WARNING: Invalid display ID for user $username: $display_id (skipping)"
         continue
     fi
     
     # Validate user exists
-    if ! id "\$username" &>/dev/null; then
-        log_msg "WARNING: User \$username does not exist (skipping)"
+    if ! id "$username" &>/dev/null; then
+        log_msg "WARNING: User $username does not exist (skipping)"
         continue
     fi
     
     # Parse optional clipboard settings (parts 2+)
-    user_copy="\$GLOBAL_COPY"
-    user_paste="\$GLOBAL_PASTE"
+    user_copy="$GLOBAL_COPY"
+    user_paste="$GLOBAL_PASTE"
     has_override=false
     
-    for ((i=2; i<\${#parts[@]}; i++)); do
-        opt=\$(echo "\${parts[i]}" | xargs | tr '[:upper:]' '[:lower:]')
-        case "\$opt" in
+    for ((i=2; i<${#parts[@]}; i++)); do
+        opt=$(echo "${parts[i]}" | xargs | tr '[:upper:]' '[:lower:]')
+        case "$opt" in
             copy)  has_override=true ;;
             paste) has_override=true ;;
         esac
     done
     
     # If user has explicit overrides, check what was specified
-    if [[ "\$has_override" == "true" ]]; then
+    if [[ "$has_override" == "true" ]]; then
         copy_specified=false
         paste_specified=false
-        for ((i=2; i<\${#parts[@]}; i++)); do
-            opt=\$(echo "\${parts[i]}" | xargs | tr '[:upper:]' '[:lower:]')
-            [[ "\$opt" == "copy" ]] && copy_specified=true
-            [[ "\$opt" == "paste" ]] && paste_specified=true
+        for ((i=2; i<${#parts[@]}; i++)); do
+            opt=$(echo "${parts[i]}" | xargs | tr '[:upper:]' '[:lower:]')
+            [[ "$opt" == "copy" ]] && copy_specified=true
+            [[ "$opt" == "paste" ]] && paste_specified=true
         done
         # Enable only what was explicitly specified
-        [[ "\$copy_specified" == "true" ]] && user_copy="Y" || user_copy="N"
-        [[ "\$paste_specified" == "true" ]] && user_paste="Y" || user_paste="N"
+        [[ "$copy_specified" == "true" ]] && user_copy="Y" || user_copy="N"
+        [[ "$paste_specified" == "true" ]] && user_paste="Y" || user_paste="N"
     fi
     
     # Build clipboard options string for this user
     clip_opts=""
-    [[ "\$user_copy" == "N" ]] && clip_opts+="-noclipboardsend "
-    [[ "\$user_paste" == "N" ]] && clip_opts+="-noclipboardrecv "
-    user_clipboard[":\$display_id"]="\$clip_opts"
+    [[ "$user_copy" == "N" ]] && clip_opts+="-noclipboardsend "
+    [[ "$user_paste" == "N" ]] && clip_opts+="-noclipboardrecv "
+    user_clipboard[":$display_id"]="$clip_opts"
     
-    desired_sessions[":\$display_id"]="\$username"
-    if [[ -n "\$clip_opts" ]]; then
-        log_msg "Config: :\$display_id -> \$username (clipboard: \$clip_opts)"
+    desired_sessions[":$display_id"]="$username"
+    if [[ -n "$clip_opts" ]]; then
+        log_msg "Config: :$display_id -> $username (clipboard: $clip_opts)"
     else
-        log_msg "Config: :\$display_id -> \$username (clipboard: full access)"
+        log_msg "Config: :$display_id -> $username (clipboard: full access)"
     fi
-done < "\$CONFIG_FILE"
+done < "$CONFIG_FILE"
 
 # Get current running sessions
 declare -A current_sessions
 while read -r line; do
     # Parse vncserver -list output (format: ":N    process-id")
-    if [[ "\$line" =~ ^(:([0-9]+)) ]]; then
-        display="\${BASH_REMATCH[1]}"
-        current_sessions["\$display"]="running"
+    if [[ "$line" =~ ^(:([0-9]+)) ]]; then
+        display="${BASH_REMATCH[1]}"
+        current_sessions["$display"]="running"
     fi
 done < <(/opt/TurboVNC/bin/vncserver -list 2>/dev/null)
 
 # Stop sessions that are no longer in config or have ownership changes
-for display in "\${!current_sessions[@]}"; do
-    desired_user="\${desired_sessions[\$display]}"
-    previous_user="\${previous_state[\$display]}"
+for display in "${!current_sessions[@]}"; do
+    desired_user="${desired_sessions[$display]}"
+    previous_user="${previous_state[$display]}"
     
-    if [[ -z "\$desired_user" ]]; then
+    if [[ -z "$desired_user" ]]; then
         # Session no longer in config - stop it
-        log_msg "Stopping orphaned session \$display"
-        /opt/TurboVNC/bin/vncserver -kill "\$display" 2>/dev/null
-        unset current_sessions["\$display"]
-    elif [[ -n "\$previous_user" && "\$desired_user" != "\$previous_user" ]]; then
+        log_msg "Stopping orphaned session $display"
+        /opt/TurboVNC/bin/vncserver -kill "$display" 2>/dev/null
+        unset current_sessions["$display"]
+    elif [[ -n "$previous_user" && "$desired_user" != "$previous_user" ]]; then
         # Ownership changed - stop session so it can be restarted
-        log_msg "Stopping session \$display (ownership changed: \$previous_user -> \$desired_user)"
-        /opt/TurboVNC/bin/vncserver -kill "\$display" 2>/dev/null
-        unset current_sessions["\$display"]
+        log_msg "Stopping session $display (ownership changed: $previous_user -> $desired_user)"
+        /opt/TurboVNC/bin/vncserver -kill "$display" 2>/dev/null
+        unset current_sessions["$display"]
     fi
 done
 
 # Start sessions that should be running
-for display in "\${!desired_sessions[@]}"; do
-    username="\${desired_sessions[\$display]}"
+for display in "${!desired_sessions[@]}"; do
+    username="${desired_sessions[$display]}"
     
-    if [[ -n "\${current_sessions[\$display]}" ]]; then
-        log_msg "Session \$display already running for \$username"
+    if [[ -n "${current_sessions[$display]}" ]]; then
+        log_msg "Session $display already running for $username"
     else
-        log_msg "Starting session \$display for user \$username"
+        log_msg "Starting session $display for user $username"
         
         # Get clipboard options for this user/display
-        local clip_opts="\${user_clipboard[\$display]}"
+        clip_opts="${user_clipboard[$display]}"
         
-        /opt/TurboVNC/bin/vncserver "\$display" \\
-            -wm "\$WM" \\
-            -securitytypes UnixLogin,TLSPlain \\
-            \$clip_opts \\
-            -geometry 1920x1080 \\
-            -depth 24 \\
+        /opt/TurboVNC/bin/vncserver "$display" \
+            -wm "$WM" \
+            -securitytypes UnixLogin,TLSPlain \
+            $clip_opts \
+            -geometry 1920x1080 \
+            -depth 24 \
             2>/dev/null
         
-        if /opt/TurboVNC/bin/vncserver -list 2>/dev/null | grep -q "\$display"; then
-            log_msg "  Started session \$display successfully"
+        if /opt/TurboVNC/bin/vncserver -list 2>/dev/null | grep -q "$display"; then
+            log_msg "  Started session $display successfully"
         else
-            log_msg "  ERROR: Failed to start session \$display"
+            log_msg "  ERROR: Failed to start session $display"
         fi
     fi
 done
 
 # Save current state for next run
-> "\$STATE_FILE"
-for display in "\${!desired_sessions[@]}"; do
-    echo "\$display:\${desired_sessions[\$display]}" >> "\$STATE_FILE"
+> "$STATE_FILE"
+for display in "${!desired_sessions[@]}"; do
+    echo "$display:${desired_sessions[$display]}" >> "$STATE_FILE"
 done
-chmod 600 "\$STATE_FILE"
+chmod 600 "$STATE_FILE"
 
 log_msg "TurboVNC session manager completed."
 STARTSCRIPT
@@ -3379,6 +3375,7 @@ function install_remote_desktop() {
         echo ""
         if [[ -n "$desktop_name" ]]; then
             local rd_options=("xrdp (RDP protocol)" "RealVNC Server" "TurboVNC Server" "ETX Server" "ETX Connection Node" "Back to main menu")
+            show_menu "Remote Desktop Options" 6 "${rd_options[@]}"
         else
             local rd_options=("ETX Server" "Back to main menu")
             show_menu "Remote Desktop Options" 2 "${rd_options[@]}"
