@@ -3034,10 +3034,12 @@ EOF
     cat > /etc/systemd/system/turbovnc-sessions.service <<EOF
 [Unit]
 Description=TurboVNC Multi-Session Startup
-After=network.target
+After=network.target sssd.service graphical.target
+Wants=sssd.service
 
 [Service]
 Type=oneshot
+ExecStartPre=/bin/sleep 5
 ExecStart=/opt/TurboVNC/bin/turbovnc-start-sessions.sh
 RemainAfterExit=yes
 
