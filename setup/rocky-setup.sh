@@ -704,8 +704,56 @@ function update_mirrors() {
 }
 
 # Install desktop environments and GUI applications
-function install_desktop() {
-    print_header "Desktop Environment Installation"
+# Install Xfce Desktop Environment
+function install_xfce_desktop() {
+    print_header "Xfce Desktop Environment Installation"
+
+    if command -v xfce4-session >/dev/null 2>&1; then
+        print_ok "Xfce Desktop Environment already installed"
+        return 0
+    fi
+
+    echo ""
+    read -p "  Install Xfce Desktop Environment? [y/N]: " confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        return
+    fi
+
+    #---------------------------------------------------------------------------
+    print_step "1" "Installing Xfce Desktop Environment"
+    #---------------------------------------------------------------------------
+    if dnf groupinstall -y "Xfce" &>/dev/null; then
+        print_ok "Xfce Desktop Environment installed"
+    else
+        print_error "Failed to install Xfce Desktop Environment"
+        return 1
+    fi
+
+    #---------------------------------------------------------------------------
+    print_step "2" "Setting Default Target"
+    #---------------------------------------------------------------------------
+    systemctl set-default graphical.target &>/dev/null
+    print_ok "Graphical target set as default"
+
+    echo ""
+    echo -e "${Green}${Bold}✓ Xfce Desktop Environment installation completed${Reset}"
+    echo ""
+}
+
+# Install MATE Desktop Environment
+function install_mate_desktop() {
+    print_header "MATE Desktop Environment Installation"
+
+    if command -v mate-session >/dev/null 2>&1; then
+        print_ok "MATE Desktop Environment already installed"
+        return 0
+    fi
+
+    echo ""
+    read -p "  Install MATE Desktop Environment? [y/N]: " confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        return
+    fi
 
     local mate_packages=(
         abrt-desktop abrt-java-connector adwaita-gtk2-theme alsa-plugins-pulseaudio 
@@ -728,33 +776,100 @@ function install_desktop() {
     )
 
     #---------------------------------------------------------------------------
-    print_step "1" "Installing Xfce Desktop Environment"
+    print_step "1" "Installing MATE Desktop Environment"
     #---------------------------------------------------------------------------
-    if ! command -v xfce4-session >/dev/null 2>&1; then
-        if dnf groupinstall -y "Xfce" &>/dev/null; then
-            print_ok "Xfce Desktop Environment installed"
-        else
-            print_error "Failed to install Xfce Desktop Environment"
-            return
-        fi
-    else
-        print_ok "Xfce Desktop Environment (already installed)"
+    print_info "Installing ${#mate_packages[@]} MATE packages..."
+    install_applications "${mate_packages[@]}"
+
+    #---------------------------------------------------------------------------
+    print_step "2" "Setting Default Target"
+    #---------------------------------------------------------------------------
+    systemctl set-default graphical.target &>/dev/null
+    print_ok "Graphical target set as default"
+
+    echo ""
+    echo -e "${Green}${Bold}✓ MATE Desktop Environment installation completed${Reset}"
+    echo ""
+}
+
+# Install GNOME Desktop Environment
+function install_gnome_desktop() {
+    print_header "GNOME Desktop Environment Installation"
+
+    if command -v gnome-session >/dev/null 2>&1; then
+        print_ok "GNOME Desktop Environment already installed"
+        return 0
+    fi
+
+    echo ""
+    read -p "  Install GNOME Desktop Environment? [y/N]: " confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        return
     fi
 
     #---------------------------------------------------------------------------
-    print_step "2" "Installing MATE Desktop Environment"
+    print_step "1" "Installing GNOME Desktop Environment"
     #---------------------------------------------------------------------------
-    if ! command -v mate-session >/dev/null 2>&1; then
-        print_info "Installing ${#mate_packages[@]} MATE packages..."
-        install_applications "${mate_packages[@]}"
+    if dnf groupinstall -y "Server with GUI" &>/dev/null; then
+        print_ok "GNOME Desktop Environment installed"
     else
-        print_ok "MATE Desktop Environment (already installed)"
+        print_error "Failed to install GNOME Desktop Environment"
+        return 1
     fi
 
     #---------------------------------------------------------------------------
-    print_step "3" "Installing Desktop Applications"
+    print_step "2" "Installing Additional GNOME Packages"
+    #---------------------------------------------------------------------------
+    local gnome_extras=(
+        gnome-tweaks gnome-extensions-app gnome-shell-extension-appindicator
+        gnome-terminal-nautilus file-roller-nautilus
+    )
+    install_applications "${gnome_extras[@]}"
+
+    #---------------------------------------------------------------------------
+    print_step "3" "Setting Default Target"
+    #---------------------------------------------------------------------------
+    systemctl set-default graphical.target &>/dev/null
+    print_ok "Graphical target set as default"
+
+    echo ""
+    echo -e "${Green}${Bold}✓ GNOME Desktop Environment installation completed${Reset}"
+    echo ""
+}
+
+# Install Desktop Applications
+function install_desktop_applications() {
+    print_header "Desktop Applications Installation"
+
+    # Check for desktop environment
+    local desktop_name=""
+    if command -v xfce4-session &>/dev/null; then
+        desktop_name="Xfce"
+    elif command -v mate-session &>/dev/null; then
+        desktop_name="MATE"
+    elif command -v gnome-session &>/dev/null; then
+        desktop_name="GNOME"
+    fi
+
+    if [[ -z "$desktop_name" ]]; then
+        print_warn "No desktop environment detected"
+        print_info "Please install a desktop environment first"
+        return 1
+    fi
+
+    print_ok "$desktop_name desktop detected"
+
+    echo ""
+    read -p "  Install desktop applications (browsers, editors, etc.)? [y/N]: " confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        return
+    fi
+
+    #---------------------------------------------------------------------------
+    print_step "1" "Adding Third-Party Repositories"
     #---------------------------------------------------------------------------
 
+    # Tilix repository
     cat <<EOF > /etc/yum.repos.d/tilix.repo
 [ivoarch-Tilix]
 name=Copr repo for Tilix owned by ivoarch
@@ -769,14 +884,15 @@ enabled_metadata=1
 EOF
     print_ok "Tilix repository added"
 
+    # Sublime Text repository
     rpm -v --import https://download.sublimetext.com/sublimehq-rpm-pub.gpg 2>/dev/null
     if dnf config-manager --add-repo https://download.sublimetext.com/rpm/stable/x86_64/sublime-text.repo &>/dev/null; then
         print_ok "Sublime Text repository added"
     else
-        print_error "Failed to add Sublime Text repository"
-        return
+        print_warn "Failed to add Sublime Text repository"
     fi
 
+    # Google Chrome repository
     cat <<EOF > /etc/yum.repos.d/google-chrome.repo
 [google-chrome]
 name=Google Chrome
@@ -787,6 +903,9 @@ gpgkey=https://dl-ssl.google.com/linux/linux_signing_key.pub
 EOF
     print_ok "Google Chrome repository added"
 
+    #---------------------------------------------------------------------------
+    print_step "2" "Installing Desktop Applications"
+    #---------------------------------------------------------------------------
     local desktop_apps=(
         "firefox" "thunderbird" "vlc" "gimp" "file-roller" "nautilus" 
         "ristretto" "transmission-gtk" "hexchat" "gnome-calculator" 
@@ -798,8 +917,34 @@ EOF
     install_applications "${desktop_apps[@]}" 
 
     echo ""
-    echo -e "${Green}${Bold}✓ Desktop Environment installation completed${Reset}"
+    echo -e "${Green}${Bold}✓ Desktop Applications installation completed${Reset}"
     echo ""
+}
+
+# Desktop Environment menu
+function install_desktop() {
+    print_header "Desktop Environment Installation"
+
+    while true; do
+        echo ""
+        local desktop_options=(
+            "Install Xfce Desktop"
+            "Install MATE Desktop"
+            "Install GNOME Desktop"
+            "Install Desktop Applications"
+            "Back to main menu"
+        )
+
+        show_menu "Desktop Environment Options" "${desktop_options[@]}"
+
+        case $menu_index in
+            0) install_xfce_desktop;;
+            1) install_mate_desktop;;
+            2) install_gnome_desktop;;
+            3) install_desktop_applications;;
+            4) return;;
+        esac
+    done
 }
 
 # Prompt user to enter AD/LDAP group names (up to 4)
@@ -2556,6 +2701,601 @@ function install_etx_server() {
     echo ""
 }
 
+# Install TurboVNC Server
+function install_turbovnc() {
+    print_header "TurboVNC Server Installation"
+
+    #---------------------------------------------------------------------------
+    # Pre-flight checks
+    #---------------------------------------------------------------------------
+    
+    # Check if already installed
+    if rpm -q --quiet turbovnc; then
+        print_ok "TurboVNC Server already installed"
+        return 0
+    fi
+
+    # Check for domain membership (required for UnixLogin authentication)
+    local current_domain=$(realm list 2>/dev/null | grep "domain-name" | cut -d ':' -f 2 | xargs)
+    if [[ -z "$current_domain" ]]; then
+        print_error "System is not joined to a domain (FreeIPA or Active Directory)"
+        print_info "TurboVNC with UnixLogin requires domain membership for authentication"
+        print_info "Please join a domain first using 'Join Domain (AD/FreeIPA)' option"
+        return 1
+    fi
+    print_ok "Domain membership detected: $current_domain"
+
+    # Detect installed desktop environments
+    local available_desktops=()
+    local desktop_sessions=()
+    
+    if command -v xfce4-session &>/dev/null; then
+        available_desktops+=("Xfce")
+        desktop_sessions+=("xfce")
+    fi
+    if command -v mate-session &>/dev/null; then
+        available_desktops+=("MATE")
+        desktop_sessions+=("mate")
+    fi
+    if command -v gnome-session &>/dev/null; then
+        available_desktops+=("GNOME")
+        desktop_sessions+=("gnome")
+    fi
+    if [[ -f /usr/share/xsessions/gnome-classic.desktop ]]; then
+        available_desktops+=("GNOME Classic")
+        desktop_sessions+=("gnome-classic")
+    fi
+
+    if [[ ${#available_desktops[@]} -eq 0 ]]; then
+        print_error "No desktop environment detected"
+        print_info "Please install a desktop environment first"
+        return 1
+    fi
+
+    #---------------------------------------------------------------------------
+    # User configuration
+    #---------------------------------------------------------------------------
+    local selected_desktop=""
+    local selected_session=""
+    local allow_copy="N"
+    local allow_paste="Y"
+
+    while true; do
+        echo ""
+        echo -e "${Dim}Available desktop environments:${Reset}"
+        for i in "${!available_desktops[@]}"; do
+            printf "  ${Cyan}%d)${Reset} %s\n" "$((i+1))" "${available_desktops[$i]}"
+        done
+
+        echo ""
+        read -p "  Select desktop environment [1-${#available_desktops[@]}]: " desktop_num
+        
+        if ! [[ "$desktop_num" =~ ^[0-9]+$ ]] || (( desktop_num < 1 || desktop_num > ${#available_desktops[@]} )); then
+            print_warn "Invalid selection"
+            continue
+        fi
+
+        selected_desktop="${available_desktops[$((desktop_num-1))]}"
+        selected_session="${desktop_sessions[$((desktop_num-1))]}"
+
+        # Clipboard configuration
+        echo ""
+        printf "  ${Cyan}Clipboard Settings:${Reset}\n"
+        printf "    Allow copy (server -> viewer)? "
+        read -p "[y/N]: " copy_input
+        [[ "$copy_input" =~ ^[Yy]$ ]] && allow_copy="Y" || allow_copy="N"
+
+        printf "    Allow paste (viewer -> server)? "
+        read -p "[Y/n]: " paste_input
+        [[ "$paste_input" =~ ^[Nn]$ ]] && allow_paste="N" || allow_paste="Y"
+
+        # Build clipboard summary
+        local clipboard_summary=""
+        if [[ "$allow_copy" == "Y" && "$allow_paste" == "Y" ]]; then
+            clipboard_summary="Copy & Paste enabled"
+        elif [[ "$allow_copy" == "Y" ]]; then
+            clipboard_summary="Copy only (server -> viewer)"
+        elif [[ "$allow_paste" == "Y" ]]; then
+            clipboard_summary="Paste only (viewer -> server)"
+        else
+            clipboard_summary="Disabled"
+        fi
+
+        local summary_items=(
+            "Domain:         $current_domain"
+            "Desktop:        $selected_desktop"
+            "Session Type:   $selected_session"
+            "Config File:    /opt/TurboVNC/config/vncuser.conf"
+            "Authentication: UnixLogin (PAM/Domain)"
+            "Clipboard:      $clipboard_summary"
+            "Security:       TLS encrypted"
+        )
+        print_summary "TurboVNC Configuration" "${summary_items[@]}"
+
+        echo ""
+        read -p "  Proceed with installation? [y/N]: " confirm
+        if [[ "$confirm" =~ ^[Yy]$ ]]; then
+            break
+        else
+            read -p "  Return to remote desktop menu? [y/N]: " return_menu
+            [[ "$return_menu" =~ ^[Yy]$ ]] && return
+        fi
+    done
+
+    #---------------------------------------------------------------------------
+    print_step "1" "Downloading TurboVNC Package"
+    #---------------------------------------------------------------------------
+    local work_dir=$(mktemp -d)
+    local turbovnc_version=""
+    local turbovnc_rpm=""
+    
+    # Get latest release from GitHub API
+    local release_info=$(curl -s "https://api.github.com/repos/TurboVNC/turbovnc/releases/latest" 2>/dev/null)
+    turbovnc_version=$(echo "$release_info" | grep '"tag_name"' | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')
+    
+    if [[ -z "$turbovnc_version" ]]; then
+        print_error "Failed to get TurboVNC version from GitHub"
+        rm -rf "$work_dir"
+        return 1
+    fi
+    print_info "Latest version: $turbovnc_version"
+    
+    # Download RPM for x86_64
+    turbovnc_rpm="turbovnc-${turbovnc_version}.x86_64.rpm"
+    local download_url="https://github.com/TurboVNC/turbovnc/releases/download/${turbovnc_version}/${turbovnc_rpm}"
+    
+    if ! curl -L -# -o "$work_dir/$turbovnc_rpm" "$download_url" 2>/dev/null; then
+        print_error "Failed to download TurboVNC package"
+        rm -rf "$work_dir"
+        return 1
+    fi
+    
+    if [[ ! -s "$work_dir/$turbovnc_rpm" ]]; then
+        print_error "Downloaded package is empty"
+        rm -rf "$work_dir"
+        return 1
+    fi
+    print_ok "Downloaded: $turbovnc_rpm"
+
+    #---------------------------------------------------------------------------
+    print_step "2" "Installing TurboVNC"
+    #---------------------------------------------------------------------------
+    if dnf install -y "$work_dir/$turbovnc_rpm" &>/dev/null; then
+        print_ok "TurboVNC installed to /opt/TurboVNC"
+    else
+        print_error "Failed to install TurboVNC"
+        rm -rf "$work_dir"
+        return 1
+    fi
+
+    #---------------------------------------------------------------------------
+    print_step "3" "Configuring Security Settings"
+    #---------------------------------------------------------------------------
+    # Create security configuration file
+    cat > /etc/turbovncserver-security.conf <<EOF
+# TurboVNC Security Configuration
+# Generated by rocky-setup.sh on $(date)
+
+# Allow UnixLogin (PAM) authentication - TLSPlain for encrypted, UnixLogin for unencrypted
+permitted-security-types = TLSPlain, UnixLogin
+
+# Enable PAM sessions for proper user login
+pam-service-name = turbovnc
+
+# Disable clipboard for security
+permitted-clipboard-send = 0
+permitted-clipboard-recv = 0
+
+# Disable reverse connections
+no-reverse-connections
+EOF
+    chmod 644 /etc/turbovncserver-security.conf
+    print_ok "Security configuration created"
+
+    #---------------------------------------------------------------------------
+    print_step "4" "Configuring PAM Authentication"
+    #---------------------------------------------------------------------------
+    # Create PAM configuration for TurboVNC (must match pam-service-name)
+    cat > /etc/pam.d/turbovnc <<EOF
+#%PAM-1.0
+# PAM configuration for TurboVNC
+# Uses system authentication (works with SSSD/FreeIPA/AD)
+auth       required     pam_sepermit.so
+auth       substack     password-auth
+auth       include      postlogin
+account    required     pam_nologin.so
+account    include      password-auth
+password   include      password-auth
+session    required     pam_selinux.so close
+session    required     pam_loginuid.so
+session    optional     pam_console.so
+session    required     pam_selinux.so open
+session    optional     pam_keyinit.so force revoke
+session    include      password-auth
+EOF
+    chmod 644 /etc/pam.d/turbovnc
+    print_ok "PAM configuration created"
+
+    # Configure SELinux to allow VNC connections
+    if command -v setsebool &>/dev/null; then
+        setsebool -P xserver_clients_write_xshm 1 &>/dev/null || true
+        setsebool -P xserver_execmem 1 &>/dev/null || true
+        setsebool -P authlogin_nsswitch_use_ldap 1 &>/dev/null || true
+    fi
+    print_ok "SELinux configured for VNC"
+
+    #---------------------------------------------------------------------------
+    print_step "5" "Creating Server Configuration"
+    #---------------------------------------------------------------------------
+    # Create system-wide turbovncserver.conf
+    cat > /etc/turbovncserver.conf <<EOF
+# TurboVNC Server Configuration
+# Generated by rocky-setup.sh on $(date)
+
+# Window manager to use
+\$wm = "$selected_session";
+
+# Security settings
+\$securityTypes = "TLSPlain,UnixLogin";
+
+# Disable clipboard
+\$sendClipboard = 0;
+\$recvClipboard = 0;
+
+# Session geometry (can be changed by client)
+\$geometry = "1920x1080";
+
+# Enable multi-threading for better performance
+# Uses number of CPU cores (up to 4)
+
+# Other settings
+\$generateOTP = 0;
+\$authTypeVNC = 0;
+EOF
+    chmod 644 /etc/turbovncserver.conf
+    print_ok "Server configuration created"
+
+    #---------------------------------------------------------------------------
+    print_step "6" "Creating Systemd Services"
+    #---------------------------------------------------------------------------
+    # Create a template service for VNC sessions
+    cat > /etc/systemd/system/turbovnc@.service <<EOF
+[Unit]
+Description=TurboVNC Server - Display %i
+After=syslog.target network.target sssd.service
+
+[Service]
+Type=forking
+ExecStart=/opt/TurboVNC/bin/vncserver :%i -securitytypes UnixLogin,TLSPlain -noclipboardsend -noclipboardrecv
+ExecStop=/opt/TurboVNC/bin/vncserver -kill :%i
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    print_ok "Systemd template service created"
+
+    # Create a master service to start all VNC sessions
+    cat > /etc/systemd/system/turbovnc-sessions.service <<EOF
+[Unit]
+Description=TurboVNC Multi-Session Startup
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/TurboVNC/bin/turbovnc-start-sessions.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    print_ok "Multi-session startup service created"
+
+    # Create config directory and initial vncuser.conf
+    mkdir -p /opt/TurboVNC/config
+    if [[ ! -f /opt/TurboVNC/config/vncuser.conf ]]; then
+        cat > /opt/TurboVNC/config/vncuser.conf <<EOF
+# TurboVNC User Session Configuration
+# Generated by rocky-setup.sh on $(date)
+#
+# Format: <username> : <display_id> [: clipboard_options]
+#
+# Basic format (uses global clipboard defaults):
+#   root : 0
+#   john.doe : 1
+#
+# With per-user clipboard overrides:
+#   jtong : 1 : copy : paste   (enable both copy and paste)
+#   jane : 2 : copy            (enable copy only)
+#   bob : 3 : paste            (enable paste only)
+#   alice : 4                  (use global defaults)
+#
+# Clipboard options:
+#   copy  = enable copy from server to viewer
+#   paste = enable paste from viewer to server
+#   (omit option to use global default set during installation)
+#
+# Display :0 (port 5900) is reserved for root by default
+# Display :1 through :99 are available for users (ports 5901-5999)
+#
+# After editing this file, run:
+#   /opt/TurboVNC/bin/turbovnc-start-sessions.sh
+# to apply changes (sessions will be stopped/started as needed)
+#
+root : 0
+EOF
+        chmod 644 /opt/TurboVNC/config/vncuser.conf
+        print_ok "User configuration file created"
+    else
+        print_ok "User configuration file exists (preserved)"
+    fi
+
+    # Create the startup script
+    cat > /opt/TurboVNC/bin/turbovnc-start-sessions.sh <<'STARTSCRIPT'
+#!/bin/bash
+# TurboVNC User-Based Session Manager
+# Reads /opt/TurboVNC/config/vncuser.conf and manages sessions accordingly
+# Tracks session ownership and restarts sessions when ownership changes
+
+CONFIG_FILE="/opt/TurboVNC/config/vncuser.conf"
+STATE_FILE="/opt/TurboVNC/config/.session_state"
+WM="\$selected_session"
+LOG_FILE="/var/log/turbovnc-sessions.log"
+
+# Global clipboard defaults (configured during installation)
+# These are used unless overridden per-user in vncuser.conf
+# Y = enabled, N = disabled
+GLOBAL_COPY="GLOBAL_COPY_PLACEHOLDER"
+GLOBAL_PASTE="GLOBAL_PASTE_PLACEHOLDER"
+
+# Per-user clipboard settings (populated from config file)
+declare -A user_clipboard
+
+log_msg() {
+    echo "\$(date '+%Y-%m-%d %H:%M:%S') \$1" | tee -a "\$LOG_FILE"
+}
+
+# Check if config file exists
+if [[ ! -f "\$CONFIG_FILE" ]]; then
+    log_msg "ERROR: Config file not found: \$CONFIG_FILE"
+    exit 1
+fi
+
+log_msg "Starting TurboVNC session manager..."
+
+# Load previous session state (display -> username mapping)
+declare -A previous_state
+if [[ -f "\$STATE_FILE" ]]; then
+    while IFS=: read -r display username; do
+        previous_state["\$display"]="\$username"
+    done < "\$STATE_FILE"
+fi
+
+# Parse config file and build desired state
+declare -A desired_sessions
+while IFS= read -r line; do
+    # Skip comments and empty lines
+    [[ "\$line" =~ ^[[:space:]]*# ]] && continue
+    [[ -z "\$line" || "\$line" =~ ^[[:space:]]*\$ ]] && continue
+    
+    # Parse line: username : display_id [: copy] [: paste]
+    IFS=':' read -ra parts <<< "\$line"
+    
+    # Get username and display_id (required)
+    username=\$(echo "\${parts[0]}" | xargs)
+    display_id=\$(echo "\${parts[1]}" | xargs)
+    
+    # Validate display_id is a number
+    if [[ ! "\$display_id" =~ ^[0-9]+\$ ]]; then
+        log_msg "WARNING: Invalid display ID for user \$username: \$display_id (skipping)"
+        continue
+    fi
+    
+    # Validate user exists
+    if ! id "\$username" &>/dev/null; then
+        log_msg "WARNING: User \$username does not exist (skipping)"
+        continue
+    fi
+    
+    # Parse optional clipboard settings (parts 2+)
+    user_copy="\$GLOBAL_COPY"
+    user_paste="\$GLOBAL_PASTE"
+    has_override=false
+    
+    for ((i=2; i<\${#parts[@]}; i++)); do
+        opt=\$(echo "\${parts[i]}" | xargs | tr '[:upper:]' '[:lower:]')
+        case "\$opt" in
+            copy)  has_override=true ;;
+            paste) has_override=true ;;
+        esac
+    done
+    
+    # If user has explicit overrides, check what was specified
+    if [[ "\$has_override" == "true" ]]; then
+        copy_specified=false
+        paste_specified=false
+        for ((i=2; i<\${#parts[@]}; i++)); do
+            opt=\$(echo "\${parts[i]}" | xargs | tr '[:upper:]' '[:lower:]')
+            [[ "\$opt" == "copy" ]] && copy_specified=true
+            [[ "\$opt" == "paste" ]] && paste_specified=true
+        done
+        # Enable only what was explicitly specified
+        [[ "\$copy_specified" == "true" ]] && user_copy="Y" || user_copy="N"
+        [[ "\$paste_specified" == "true" ]] && user_paste="Y" || user_paste="N"
+    fi
+    
+    # Build clipboard options string for this user
+    clip_opts=""
+    [[ "\$user_copy" == "N" ]] && clip_opts+="-noclipboardsend "
+    [[ "\$user_paste" == "N" ]] && clip_opts+="-noclipboardrecv "
+    user_clipboard[":\$display_id"]="\$clip_opts"
+    
+    desired_sessions[":\$display_id"]="\$username"
+    if [[ -n "\$clip_opts" ]]; then
+        log_msg "Config: :\$display_id -> \$username (clipboard: \$clip_opts)"
+    else
+        log_msg "Config: :\$display_id -> \$username (clipboard: full access)"
+    fi
+done < "\$CONFIG_FILE"
+
+# Get current running sessions
+declare -A current_sessions
+while read -r line; do
+    # Parse vncserver -list output (format: ":N    process-id")
+    if [[ "\$line" =~ ^(:([0-9]+)) ]]; then
+        display="\${BASH_REMATCH[1]}"
+        current_sessions["\$display"]="running"
+    fi
+done < <(/opt/TurboVNC/bin/vncserver -list 2>/dev/null)
+
+# Stop sessions that are no longer in config or have ownership changes
+for display in "\${!current_sessions[@]}"; do
+    desired_user="\${desired_sessions[\$display]}"
+    previous_user="\${previous_state[\$display]}"
+    
+    if [[ -z "\$desired_user" ]]; then
+        # Session no longer in config - stop it
+        log_msg "Stopping orphaned session \$display"
+        /opt/TurboVNC/bin/vncserver -kill "\$display" 2>/dev/null
+        unset current_sessions["\$display"]
+    elif [[ -n "\$previous_user" && "\$desired_user" != "\$previous_user" ]]; then
+        # Ownership changed - stop session so it can be restarted
+        log_msg "Stopping session \$display (ownership changed: \$previous_user -> \$desired_user)"
+        /opt/TurboVNC/bin/vncserver -kill "\$display" 2>/dev/null
+        unset current_sessions["\$display"]
+    fi
+done
+
+# Start sessions that should be running
+for display in "\${!desired_sessions[@]}"; do
+    username="\${desired_sessions[\$display]}"
+    
+    if [[ -n "\${current_sessions[\$display]}" ]]; then
+        log_msg "Session \$display already running for \$username"
+    else
+        log_msg "Starting session \$display for user \$username"
+        
+        # Get clipboard options for this user/display
+        local clip_opts="\${user_clipboard[\$display]}"
+        
+        /opt/TurboVNC/bin/vncserver "\$display" \\
+            -wm "\$WM" \\
+            -securitytypes UnixLogin,TLSPlain \\
+            \$clip_opts \\
+            -geometry 1920x1080 \\
+            -depth 24 \\
+            2>/dev/null
+        
+        if /opt/TurboVNC/bin/vncserver -list 2>/dev/null | grep -q "\$display"; then
+            log_msg "  Started session \$display successfully"
+        else
+            log_msg "  ERROR: Failed to start session \$display"
+        fi
+    fi
+done
+
+# Save current state for next run
+> "\$STATE_FILE"
+for display in "\${!desired_sessions[@]}"; do
+    echo "\$display:\${desired_sessions[\$display]}" >> "\$STATE_FILE"
+done
+chmod 600 "\$STATE_FILE"
+
+log_msg "TurboVNC session manager completed."
+STARTSCRIPT
+    # Replace the placeholder with actual session type
+    sed -i "s/\$selected_session/$selected_session/g" /opt/TurboVNC/bin/turbovnc-start-sessions.sh
+    
+    # Set global clipboard defaults based on user selections
+    sed -i "s/GLOBAL_COPY_PLACEHOLDER/$allow_copy/g" /opt/TurboVNC/bin/turbovnc-start-sessions.sh
+    sed -i "s/GLOBAL_PASTE_PLACEHOLDER/$allow_paste/g" /opt/TurboVNC/bin/turbovnc-start-sessions.sh
+    
+    chmod 755 /opt/TurboVNC/bin/turbovnc-start-sessions.sh
+    print_ok "Startup script created (user-based sessions)"
+
+    # Create a shutdown script
+    cat > /opt/TurboVNC/bin/turbovnc-stop-sessions.sh <<'EOF'
+#!/bin/bash
+# TurboVNC Multi-Session Shutdown Script
+
+LOG_FILE="/var/log/turbovnc-sessions.log"
+
+log_msg() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') $1" | tee -a "$LOG_FILE"
+}
+
+log_msg "Stopping all TurboVNC sessions..."
+
+for session in $(/opt/TurboVNC/bin/vncserver -list 2>/dev/null | grep "^:" | awk '{print $1}'); do
+    /opt/TurboVNC/bin/vncserver -kill "$session" 2>/dev/null
+    log_msg "  Stopped session $session"
+done
+
+log_msg "All TurboVNC sessions stopped."
+EOF
+    chmod 755 /opt/TurboVNC/bin/turbovnc-stop-sessions.sh
+    print_ok "Shutdown script created"
+
+    # Reload systemd
+    systemctl daemon-reload
+
+    #---------------------------------------------------------------------------
+    print_step "7" "Configuring Firewall"
+    #---------------------------------------------------------------------------
+    # Open ports for VNC sessions (5900-5999 to cover all possible displays)
+    firewall-cmd --permanent --add-port=5900-5999/tcp &>/dev/null
+    firewall-cmd --reload &>/dev/null
+    print_ok "Firewall ports 5900-5999/tcp opened"
+
+    #---------------------------------------------------------------------------
+    print_step "8" "Enabling Services"
+    #---------------------------------------------------------------------------
+    systemctl enable turbovnc-sessions.service &>/dev/null
+    print_ok "TurboVNC multi-session service enabled"
+
+    #---------------------------------------------------------------------------
+    print_step "9" "Starting VNC Sessions"
+    #---------------------------------------------------------------------------
+    if /opt/TurboVNC/bin/turbovnc-start-sessions.sh; then
+        print_ok "VNC sessions started"
+    else
+        print_warn "Some sessions may have failed to start"
+    fi
+
+    rm -rf "$work_dir"
+
+    echo ""
+    echo -e "${Green}${Bold}✓ TurboVNC Server installation completed${Reset}"
+    echo ""
+    echo -e "${Dim}Connection Info:${Reset}"
+    echo -e "  • VNC ports: 5900-5999 (display :0 through :99)"
+    echo -e "  • Authentication: Domain username/password"
+    echo -e "  • Desktop: $selected_desktop"
+    echo ""
+    echo -e "${Dim}User Configuration:${Reset}"
+    echo -e "  • Config file: /opt/TurboVNC/config/vncuser.conf"
+    echo -e "  • Format: <username> : <display_id>"
+    echo -e "  • Display :0 (port 5900) is reserved for root"
+    echo -e "  • Example entries:"
+    echo -e "      root : 0"
+    echo -e "      john.doe : 1"
+    echo -e "      jane.smith : 2"
+    echo ""
+    echo -e "${Dim}Usage:${Reset}"
+    echo -e "  • Edit /opt/TurboVNC/config/vncuser.conf to add users"
+    echo -e "  • Run /opt/TurboVNC/bin/turbovnc-start-sessions.sh to apply changes"
+    echo -e "  • Connect using TurboVNC Viewer to: hostname:<display>"
+    echo -e "  • Authenticate with your domain credentials"
+    echo ""
+    echo -e "${Dim}Management:${Reset}"
+    echo -e "  • List sessions:  /opt/TurboVNC/bin/vncserver -list"
+    echo -e "  • Apply config:   /opt/TurboVNC/bin/turbovnc-start-sessions.sh"
+    echo -e "  • Stop all:       /opt/TurboVNC/bin/turbovnc-stop-sessions.sh"
+    echo -e "  • View log:       cat /var/log/turbovnc-sessions.log"
+    echo ""
+}
+
 # Remote Desktop menu
 function install_remote_desktop() {
     print_header "Remote Desktop Installation"
@@ -2581,7 +3321,7 @@ function install_remote_desktop() {
     while true; do
         echo ""
         if [[ -n "$desktop_name" ]]; then
-            local rd_options=("xrdp (RDP protocol)" "RealVNC Server" "ETX Server" "ETX Connection Node" "Back to main menu")
+            local rd_options=("xrdp (RDP protocol)" "RealVNC Server" "TurboVNC Server" "ETX Server" "ETX Connection Node" "Back to main menu")
         else
             local rd_options=("ETX Server" "Back to main menu")
         fi
@@ -2592,9 +3332,10 @@ function install_remote_desktop() {
             case $menu_index in
                 0) install_xrdp;;
                 1) install_realvnc;;
-                2) install_etx_server;;
-                3) install_etx_node;;
-                4) return;;
+                2) install_turbovnc;;
+                3) install_etx_server;;
+                4) install_etx_node;;
+                5) return;;
             esac
         else
             case $menu_index in
