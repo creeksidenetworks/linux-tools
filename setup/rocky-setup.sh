@@ -1076,6 +1076,7 @@ function enroll_domain() {
             --domain="$domain_name" \
             --principal="$admin_user" \
             --mkhomedir \
+            --force-join \
             --unattended
         if [[ $? -eq 0 ]]; then
             print_ok "Joined $domain_name (FreeIPA)"
@@ -3194,15 +3195,14 @@ while IFS= read -r line; do
     fi
 done < "$CONFIG_FILE"
 
-# Get current running sessions
+# Get current running sessions by checking Xvnc processes
+# This works regardless of which user started the session
 declare -A current_sessions
-while read -r line; do
-    # Parse vncserver -list output (format: ":N    process-id")
-    if [[ "$line" =~ ^(:([0-9]+)) ]]; then
-        display="${BASH_REMATCH[1]}"
-        current_sessions["$display"]="running"
+while read -r display_num; do
+    if [[ -n "$display_num" ]]; then
+        current_sessions[":$display_num"]="running"
     fi
-done < <(/opt/TurboVNC/bin/vncserver -list 2>/dev/null)
+done < <(pgrep -a Xvnc 2>/dev/null | grep -oP ':\K[0-9]+(?= )' | sort -u)
 
 # Stop sessions that are no longer in config or have ownership changes
 for display in "${!current_sessions[@]}"; do
@@ -3247,9 +3247,11 @@ for display in "${!desired_sessions[@]}"; do
             su - "$username" -s /bin/bash -c "$vnc_cmd" 2>/dev/null
         fi
         
-        # Check if session started (need to check as root for all sessions)
+        # Check if session started by looking for Xvnc process
+        # Extract display number (e.g., ":1" -> "1")
+        display_num="${display#:}"
         sleep 2
-        if /opt/TurboVNC/bin/vncserver -list 2>/dev/null | grep -q "$display"; then
+        if pgrep -a Xvnc 2>/dev/null | grep -q "Xvnc $display "; then
             log_msg "  Started session $display successfully"
         else
             log_msg "  ERROR: Failed to start session $display"
