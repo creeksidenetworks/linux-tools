@@ -3121,6 +3121,8 @@ log_msg "Starting TurboVNC session manager..."
 declare -A previous_state
 if [[ -f "$STATE_FILE" ]]; then
     while IFS=: read -r display username; do
+        # Skip empty lines
+        [[ -z "$display" || -z "$username" ]] && continue
         previous_state["$display"]="$username"
     done < "$STATE_FILE"
 fi
@@ -3229,17 +3231,24 @@ for display in "${!desired_sessions[@]}"; do
     else
         log_msg "Starting session $display for user $username"
         
+        # Start VNC session AS THE USER (not root)
+        # This ensures the session runs with proper user context
+        
         # Get clipboard options for this user/display
         clip_opts="${user_clipboard[$display]}"
         
-        /opt/TurboVNC/bin/vncserver "$display" \
-            -wm "$WM" \
-            -securitytypes UnixLogin,TLSPlain \
-            $clip_opts \
-            -geometry 1920x1080 \
-            -depth 24 \
-            2>/dev/null
+        # Build the vncserver command
+        vnc_cmd="/opt/TurboVNC/bin/vncserver $display -wm $WM -securitytypes UnixLogin,TLSPlain $clip_opts -geometry 1920x1080 -depth 24"
         
+        if [[ "$username" == "root" ]]; then
+            eval "$vnc_cmd" 2>/dev/null
+        else
+            # Use su with bash to run vncserver as the user
+            su - "$username" -s /bin/bash -c "$vnc_cmd" 2>/dev/null
+        fi
+        
+        # Check if session started (need to check as root for all sessions)
+        sleep 2
         if /opt/TurboVNC/bin/vncserver -list 2>/dev/null | grep -q "$display"; then
             log_msg "  Started session $display successfully"
         else
