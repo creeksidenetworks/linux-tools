@@ -1162,7 +1162,7 @@ function update_network_settings() {
 
     while true; do
         local net_options=("List network interfaces" "Configure interface" "Rename interface" "Create bond interface" "Create VLAN interface" "Back to main menu")
-        show_menu "Network Options" "${net_options[@]}"
+        show_menu "Network Options" 6 "${net_options[@]}"
 
         case $menu_index in
             0) list_network_interfaces;;
@@ -1262,7 +1262,7 @@ function select_ip_config() {
     fi
     
     local ip_options=("DHCP" "Static IP")
-    show_menu "IPv4 Configuration" "${ip_options[@]}"
+    show_menu "IPv4 Configuration" 1 "${ip_options[@]}"
     
     bootproto="dhcp"
     ipaddr=""
@@ -1393,7 +1393,7 @@ function configure_interface() {
     fi
     
     interfaces+=("Return to network menu")
-    show_menu "Select interface" "${interfaces[@]}"
+    show_menu "Select interface" ${#interfaces[@]} "${interfaces[@]}"
     
     # Check if user selected return option
     if [[ $menu_index -eq $((${#interfaces[@]} - 1)) ]]; then
@@ -1450,51 +1450,117 @@ function configure_interface() {
         fi
     done
     
-    # Delete existing connection if it exists
-    if [[ -n "$existing_conn" ]]; then
-        nmcli connection delete "$existing_conn" &>/dev/null
+    # Check if this is the default route interface (SSH connection risk)
+    local default_iface=$(ip route show default 2>/dev/null | awk '{print $5}' | head -1)
+    local is_default_route="N"
+    [[ "$selected_iface" == "$default_iface" ]] && is_default_route="Y"
+    
+    # Calculate prefix from netmask if static IP
+    local prefix=""
+    local ipv4_addr=""
+    local dns_servers=""
+    if [[ "$bootproto" != "dhcp" ]]; then
+        prefix=$(netmask_to_cidr "$netmask")
+        ipv4_addr="${ipaddr}/${prefix}"
+        dns_servers="$dns1"
+        [[ -n "$dns2" ]] && dns_servers="$dns1 $dns2"
     fi
     
-    # Create new connection using nmcli
-    if [[ "$bootproto" == "dhcp" ]]; then
-        nmcli connection add type ethernet con-name "$selected_iface" ifname "$selected_iface" \
-            ipv4.method auto \
-            ipv6.method disabled \
-            802-3-ethernet.mtu "$new_mtu" \
-            connection.autoconnect yes &>/dev/null
-    else
-        # Calculate prefix from netmask
-        local prefix=$(netmask_to_cidr "$netmask")
-        local ipv4_addr="${ipaddr}/${prefix}"
-        
-        if [[ -n "$gateway" ]]; then
-            local dns_servers="$dns1"
-            [[ -n "$dns2" ]] && dns_servers="$dns1 $dns2"
-            
-            nmcli connection add type ethernet con-name "$selected_iface" ifname "$selected_iface" \
-                ipv4.method manual \
-                ipv4.addresses "$ipv4_addr" \
-                ipv4.gateway "$gateway" \
-                ipv4.dns "$dns_servers" \
+    # Use nmcli modify if connection exists, otherwise add new connection
+    if [[ -n "$existing_conn" ]]; then
+        # Modify existing connection
+        if [[ "$bootproto" == "dhcp" ]]; then
+            nmcli connection modify "$existing_conn" \
+                ipv4.method auto \
+                ipv4.addresses "" \
+                ipv4.gateway "" \
+                ipv4.dns "" \
+                ipv4.never-default "" \
                 ipv6.method disabled \
                 802-3-ethernet.mtu "$new_mtu" \
                 connection.autoconnect yes &>/dev/null
         else
+            if [[ -n "$gateway" ]]; then
+                nmcli connection modify "$existing_conn" \
+                    ipv4.method manual \
+                    ipv4.addresses "$ipv4_addr" \
+                    ipv4.gateway "$gateway" \
+                    ipv4.dns "$dns_servers" \
+                    ipv4.never-default "" \
+                    ipv6.method disabled \
+                    802-3-ethernet.mtu "$new_mtu" \
+                    connection.autoconnect yes &>/dev/null
+            else
+                nmcli connection modify "$existing_conn" \
+                    ipv4.method manual \
+                    ipv4.addresses "$ipv4_addr" \
+                    ipv4.gateway "" \
+                    ipv4.dns "$dns_servers" \
+                    ipv4.never-default yes \
+                    ipv6.method disabled \
+                    802-3-ethernet.mtu "$new_mtu" \
+                    connection.autoconnect yes &>/dev/null
+            fi
+        fi
+        print_ok "Connection modified: $existing_conn"
+    else
+        # Create new connection
+        if [[ "$bootproto" == "dhcp" ]]; then
             nmcli connection add type ethernet con-name "$selected_iface" ifname "$selected_iface" \
-                ipv4.method manual \
-                ipv4.addresses "$ipv4_addr" \
-                ipv4.never-default yes \
+                ipv4.method auto \
                 ipv6.method disabled \
                 802-3-ethernet.mtu "$new_mtu" \
                 connection.autoconnect yes &>/dev/null
+        else
+            if [[ -n "$gateway" ]]; then
+                nmcli connection add type ethernet con-name "$selected_iface" ifname "$selected_iface" \
+                    ipv4.method manual \
+                    ipv4.addresses "$ipv4_addr" \
+                    ipv4.gateway "$gateway" \
+                    ipv4.dns "$dns_servers" \
+                    ipv6.method disabled \
+                    802-3-ethernet.mtu "$new_mtu" \
+                    connection.autoconnect yes &>/dev/null
+            else
+                nmcli connection add type ethernet con-name "$selected_iface" ifname "$selected_iface" \
+                    ipv4.method manual \
+                    ipv4.addresses "$ipv4_addr" \
+                    ipv4.never-default yes \
+                    ipv6.method disabled \
+                    802-3-ethernet.mtu "$new_mtu" \
+                    connection.autoconnect yes &>/dev/null
+            fi
         fi
+        print_ok "Connection created: $selected_iface"
     fi
     
-    # Activate the connection
-    nmcli connection up "$selected_iface" &>/dev/null
-    
-    print_ok "Configuration applied using NetworkManager"
-    print_info "Connection activated: $selected_iface"
+    # Apply changes: reboot for default route interface, down/up for others
+    if [[ "$is_default_route" == "Y" ]]; then
+        echo ""
+        print_warn "This is the default route interface (SSH connection)"
+        print_warn "Reboot required to apply changes safely"
+        echo ""
+        if [[ "$bootproto" == "dhcp" ]]; then
+            print_info "New configuration: DHCP (IP will be assigned on boot)"
+        else
+            print_info "New IP address: $ipaddr"
+        fi
+        echo ""
+        read -p "  Reboot now to apply changes? [y/N]: " reboot_confirm
+        if [[ "$reboot_confirm" =~ ^[Yy]$ ]]; then
+            print_info "Rebooting in 5 seconds..."
+            sleep 5
+            reboot
+        else
+            print_info "Please reboot manually to apply network changes"
+        fi
+    else
+        # Not default route - safe to down/up immediately
+        local conn_to_activate="${existing_conn:-$selected_iface}"
+        nmcli connection down "$conn_to_activate" &>/dev/null
+        nmcli connection up "$conn_to_activate" &>/dev/null
+        print_ok "Connection activated: $conn_to_activate"
+    fi
 }
 
 # Convert netmask to CIDR prefix
@@ -1531,7 +1597,7 @@ function rename_interface() {
     fi
     
     interfaces+=("Return to network menu")
-    show_menu "Select interface to rename" "${interfaces[@]}"
+    show_menu "Select interface to rename" ${#interfaces[@]} "${interfaces[@]}"
     
     # Check if user selected return option
     if [[ $menu_index -eq $((${#interfaces[@]} - 1)) ]]; then
@@ -1663,7 +1729,7 @@ function create_bond_interface() {
         fi
         
         local bond_modes=("balance-rr (Round-robin)" "active-backup (Failover)" "balance-xor" "broadcast" "802.3ad (LACP)" "balance-tlb" "balance-alb")
-        show_menu "Select bond mode" "${bond_modes[@]}"
+        show_menu "Select bond mode" 2 "${bond_modes[@]}"
         
         local bond_mode="active-backup"
         local bond_opts="miimon=100"
@@ -2047,9 +2113,7 @@ function install_xrdp() {
 function install_realvnc() {
     print_header "RealVNC Server Installation"
 
-    local http_base="https://download.creekside.network/resource/apps/realVNC"
-    local http_user="downloader"
-    local http_pass="Khyp04682"
+    local vnc_server_url="https://downloads.realvnc.com/download/file/vnc.files/VNC-Server-6.9.1-Linux-x64.rpm"
 
     if rpm -q --quiet realvnc-vnc-server; then
         print_ok "RealVNC Server already installed"
@@ -2111,66 +2175,59 @@ function install_realvnc() {
     fi
 
     #---------------------------------------------------------------------------
-    print_step "2" "Installing VNC Dummy Video Driver"
+    print_step "2" "Installing X11 Dummy Video Driver"
     #---------------------------------------------------------------------------
-    # Install development tools if needed
-    if ! rpm -q --quiet gcc; then
-        dnf groupinstall -y "Development Tools" &>/dev/null
-        print_ok "Development tools installed"
-    fi
-
-    local vnc_dev_packages=("autoconf" "automake" "libtool" "make" "pkgconfig" "xorg-x11-server-devel")
-    install_applications "${vnc_dev_packages[@]}"
+    # Install official X11 dummy driver (recommended by RealVNC)
+    # Reference: https://help.realvnc.com/hc/en-us/articles/360005081572
+    local dummy_packages=("xorg-x11-drv-dummy")
+    install_applications "${dummy_packages[@]}"
+    print_ok "X11 dummy driver installed"
 
     local work_dir=$(mktemp -d)
-    
-    # Download and build VNC driver
-    curl --silent --user "$http_user:$http_pass" "$http_base/driver/xf86-video-vnc-master.zip" -o "$work_dir/xf86-video-vnc-master.zip"
-    
-    if [[ -f "$work_dir/xf86-video-vnc-master.zip" ]]; then
-        cd "$work_dir"
-        unzip -q xf86-video-vnc-master.zip
-        cd xf86-video-vnc-master
-        ./buildAndInstall automated &>/dev/null
-        print_ok "VNC dummy video driver installed"
-    else
-        print_warn "Could not download VNC driver (optional for 4K support)"
-    fi
 
     #---------------------------------------------------------------------------
     print_step "3" "Downloading RealVNC Server"
     #---------------------------------------------------------------------------
-    # Find the latest RPM in the server directory
-    local vnc_rpm=""
-    while read -r filename; do
-        if [[ "$filename" == *"Linux-x64.rpm" && "$filename" != *"@"* ]]; then
-            vnc_rpm="$filename"
-            break
-        fi
-    done < <(curl --silent --user "$http_user:$http_pass" "$http_base/server/" 2>/dev/null | grep -oP 'href="\K[^"]+\.rpm')
-
-    if [[ -z "$vnc_rpm" ]]; then
-        print_error "No RealVNC RPM package found"
+    local vnc_rpm="$work_dir/VNC-Server.rpm"
+    
+    if curl -# -L "$vnc_server_url" -o "$vnc_rpm"; then
+        print_ok "Downloaded RealVNC Server"
+    else
+        print_error "Failed to download RealVNC Server"
         rm -rf "$work_dir"
         return 1
     fi
 
-    curl -# --user "$http_user:$http_pass" "$http_base/server/$vnc_rpm" -o "$work_dir/$vnc_rpm"
-    print_ok "Downloaded: $vnc_rpm"
-
     #---------------------------------------------------------------------------
     print_step "4" "Installing RealVNC Server"
     #---------------------------------------------------------------------------
-    if dnf localinstall -y "$work_dir/$vnc_rpm" &>/dev/null; then
+    if dnf localinstall -y "$vnc_rpm" &>/dev/null; then
         print_ok "RealVNC Server installed"
     else
         print_error "Failed to install RealVNC Server"
         rm -rf "$work_dir"
         return 1
     fi
+    
+    #---------------------------------------------------------------------------
+    print_step "5" "Configuring X11 Dummy Driver"
+    #---------------------------------------------------------------------------
+    # Backup existing xorg.conf if present
+    if [[ -f /etc/X11/xorg.conf ]]; then
+        cp /etc/X11/xorg.conf /etc/X11/xorg.conf.bak
+        print_ok "Backed up existing xorg.conf"
+    fi
+    
+    # Copy RealVNC's dummy driver configuration
+    if [[ -f /etc/X11/vncserver-virtual-dummy.conf ]]; then
+        cp /etc/X11/vncserver-virtual-dummy.conf /etc/X11/xorg.conf
+        print_ok "X11 dummy driver configured"
+    else
+        print_warn "RealVNC dummy config not found, using default"
+    fi
 
     #---------------------------------------------------------------------------
-    print_step "5" "Configuring RealVNC"
+    print_step "6" "Configuring RealVNC"
     #---------------------------------------------------------------------------
     mkdir -p /etc/vnc/config.d
 
@@ -2229,7 +2286,7 @@ EOF
     print_ok "PAM authentication configured"
 
     #---------------------------------------------------------------------------
-    print_step "6" "Adding License Key"
+    print_step "7" "Adding License Key"
     #---------------------------------------------------------------------------
     if vnclicense -add "$license_key" &>/dev/null; then
         print_ok "License key added"
@@ -2238,20 +2295,20 @@ EOF
     fi
 
     #---------------------------------------------------------------------------
-    print_step "7" "Configuring Firewall"
+    print_step "8" "Configuring Firewall"
     #---------------------------------------------------------------------------
     firewall-cmd --permanent --add-service=vncserver-virtuald &>/dev/null
     firewall-cmd --reload &>/dev/null
     print_ok "Firewall configured for VNC"
 
     #---------------------------------------------------------------------------
-    print_step "8" "Starting VNC Service"
+    print_step "9" "Starting VNC Service"
     #---------------------------------------------------------------------------
     systemctl enable vncserver-virtuald.service --now &>/dev/null
     print_ok "VNC virtual desktop service started"
 
     #---------------------------------------------------------------------------
-    print_step "9" "Configuring User Session"
+    print_step "10" "Configuring User Session"
     #---------------------------------------------------------------------------
     echo "mate-session" > /etc/skel/.Xclients
     chmod a+x /etc/skel/.Xclients
@@ -2313,7 +2370,7 @@ function install_etx_node() {
     IFS=$'\n' etx_versions=($(sort -V <<<"${etx_versions[*]}")); unset IFS
     
     echo ""
-    show_menu "Select ETX version" "${etx_versions[@]}"
+    show_menu "Select ETX version" 1 "${etx_versions[@]}"
     local selected_version="${etx_versions[$menu_index]}"
     print_info "Selected version: $selected_version"
 
@@ -2479,7 +2536,7 @@ function install_etx_server() {
     IFS=$'\n' etx_versions=($(sort -V <<<"${etx_versions[*]}")); unset IFS
     
     echo ""
-    show_menu "Select ETX version" "${etx_versions[@]}"
+    show_menu "Select ETX version" 1 "${etx_versions[@]}"
     local selected_version="${etx_versions[$menu_index]}"
     print_info "Selected version: $selected_version"
 
@@ -2582,11 +2639,11 @@ function install_remote_desktop() {
         echo ""
         if [[ -n "$desktop_name" ]]; then
             local rd_options=("xrdp (RDP protocol)" "RealVNC Server" "ETX Server" "ETX Connection Node" "Back to main menu")
+            show_menu "Remote Desktop Options" 5 "${rd_options[@]}"
         else
             local rd_options=("ETX Server" "Back to main menu")
+            show_menu "Remote Desktop Options" 2 "${rd_options[@]}"
         fi
-
-        show_menu "Remote Desktop Options" "${rd_options[@]}"
 
         if [[ -n "$desktop_name" ]]; then
             case $menu_index in
@@ -2645,7 +2702,7 @@ function main() {
             "Join Domain (AD/FreeIPA)"
             "Exit"
         )
-        show_menu "Main Menu" "${menu_items[@]}"
+        show_menu "Main Menu" 8 "${menu_items[@]}"
         
         case $menu_index in
             0) initialization;;
