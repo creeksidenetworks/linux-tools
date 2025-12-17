@@ -3243,6 +3243,8 @@ for display in "${!desired_sessions[@]}"; do
         vnc_cmd="/opt/TurboVNC/bin/vncserver $display -wm $WM -securitytypes UnixLogin,TLSPlain $clip_opts -geometry 1920x1080 -depth 24"
         
         if [[ "$username" == "root" ]]; then
+            # Set HOME explicitly for systemd environment where it may not be set
+            export HOME=/root
             eval "$vnc_cmd" 2>/dev/null
         else
             # Use su with bash to run vncserver as the user
