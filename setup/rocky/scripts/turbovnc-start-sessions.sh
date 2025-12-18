@@ -165,7 +165,7 @@ for display in "${!desired_sessions[@]}"; do
         # Check if session started by looking for Xvnc process
         # Extract display number (e.g., ":1" -> "1")
         display_num="${display#:}"
-        sleep 2
+        #sleep 2
         if pgrep -a Xvnc 2>/dev/null | grep -q "Xvnc $display "; then
             log_msg "  Started session $display successfully"
         else
