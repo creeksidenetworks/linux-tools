@@ -5,14 +5,16 @@
 
 CONFIG_FILE="/opt/TurboVNC/config/vncuser.conf"
 STATE_FILE="/opt/TurboVNC/config/.session_state"
-WM="xfce"
+SETTINGS_FILE="/opt/TurboVNC/config/turbovnc.conf"
 LOG_FILE="/var/log/turbovnc-sessions.log"
 
-# Global clipboard defaults (configured during installation)
-# These are used unless overridden per-user in vncuser.conf
-# Y = enabled, N = disabled
-GLOBAL_COPY="N"
-GLOBAL_PASTE="Y"
+# Load settings from config file
+if [[ -f "$SETTINGS_FILE" ]]; then
+    source "$SETTINGS_FILE"
+else
+    echo "ERROR: Settings file not found: $SETTINGS_FILE" | tee -a "$LOG_FILE"
+    exit 1
+fi
 
 # Per-user clipboard settings (populated from config file)
 declare -A user_clipboard
