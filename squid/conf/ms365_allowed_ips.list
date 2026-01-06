@@ -1,0 +1,7 @@
+# List of server IPs allowed to use MS365/OIDC authentication
+# Add your server IPs here, one per line
+# Examples:
+# 192.168.1.10
+# 10.0.0.0/24
+# 172.16.0.5
+

@@ -16,6 +16,8 @@ services:
     volumes:
       - /opt/squid/conf/squid.conf:/etc/squid/squid.conf
       - /opt/squid/conf/strict_whitelisted_domains.list:/etc/squid/strict_whitelisted_domains.list
+      - /opt/squid/conf/ms365_oidc_domains.list:/etc/squid/ms365_oidc_domains.list
+      - /opt/squid/conf/ms365_allowed_ips.list:/etc/squid/ms365_allowed_ips.list
       - /opt/squid/data/cache:/var/spool/squid
       - /opt/squid/data/logs:/var/log/squid
 

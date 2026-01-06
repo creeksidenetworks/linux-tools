@@ -1,0 +1,13 @@
+# Microsoft 365 / Azure AD / OIDC Authentication domains
+.login.microsoftonline.com
+.login.microsoft.com
+.login.windows.net
+.graph.microsoft.com
+.microsoftonline.com
+.msauth.net
+.msftauth.net
+.msidentity.com
+.aadcdn.msidentity.com
+.aadcdn.msauth.net
+.aadcdn.msftauth.net
+.secure.aadcdn.microsoftonline-p.com
