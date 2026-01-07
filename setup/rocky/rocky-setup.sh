@@ -278,8 +278,12 @@ function select_mirror_country() {
 # Configure yum repository mirrors based on detected/selected country
 # Updates both Rocky Linux base repos and EPEL repos
 function yum_configure_mirror() {
+    country="$1"
     # Let user select mirror country (with auto-detection as default)
-    select_mirror_country
+    if [[ -z "$country" ]]; then
+        select_mirror_country
+    fi
+
     echo "  Configuring yum repositories for $COUNTRY"
     baseos_url="${BASE_MIRRORS[$COUNTRY]}"
     epel_url="${EPEL_MIRRORS[$COUNTRY]}"
@@ -522,7 +526,7 @@ EOF
     print_ok "RPM Fusion repositories enabled"
 
     # Configure yum mirrors
-    yum_configure_mirror
+    yum_configure_mirror "$COUNTRY"
 
     #---------------------------------------------------------------------------
     print_step "3" "Updating System Packages"
@@ -544,10 +548,10 @@ EOF
         "yum-utils" "util-linux" "tree"  
         "nano" "ed" "fontconfig" "nedit" "htop" "pwgen"
         "nfs-utils" "cifs-utils" "samba-client" "autofs" 
-        "subversion" "ansible" 
+        "subversion" "ansible" "git"
         "iperf3" "traceroute" "mtr" "rsnapshot"
         "tar"  "zip" "unzip" "p7zip" "p7zip-plugins" "cabextract"
-        "rsync" "curl" "ftp" "wget" 
+        "rsync" "curl" "ftp" "wget" "cloud-utils-growpart" "cloud-init"
         "telnet" "jq"  "lsof" "bind-utils" "tcpdump" "net-tools"
         "openssl" "cyrus-sasl" "cyrus-sasl-plain" "cyrus-sasl-ldap"
         "openldap-clients" "ipa-client"
@@ -560,93 +564,74 @@ EOF
     install_applications "${default_packages[@]}"
 
     #---------------------------------------------------------------------------
-    print_step "5" "Installing Docker CE"
+    print_step "5" "Configuring Firewall"
     #---------------------------------------------------------------------------
     
-    if command -v docker >/dev/null 2>&1; then
-        docker_version=$(docker --version 2>/dev/null | cut -d' ' -f3 | tr -d ',')
-        compose_version=$(docker compose version 2>/dev/null | cut -d' ' -f4)
-        print_ok "Docker CE already installed (v$docker_version)"
-        [[ -n "$compose_version" ]] && print_ok "Docker Compose (v$compose_version)"
+    if systemctl is-active --quiet firewalld; then
+        print_ok "Firewalld is already running"
     else
-        # Add Docker repository based on region
-        if [[ "$COUNTRY" == "CN" ]]; then
-            cat <<EOF > /etc/yum.repos.d/docker-ce.repo
-[docker-ce-stable]
-name=Docker CE Stable - \$basearch
-baseurl=https://mirrors.nju.edu.cn/docker-ce/linux/rhel/${os_version}/\$basearch/stable
-enabled=1
-gpgcheck=0
-gpgkey=https://mirrors.nju.edu.cn/docker-ce/linux/rhel/gpg
-EOF
-            print_ok "Docker CE repository (NJU mirror)"
+        print_info "Starting firewalld service..."
+        if systemctl enable firewalld &>/dev/null && systemctl start firewalld &>/dev/null; then
+            print_ok "Firewalld enabled and started"
         else
-            dnf config-manager --add-repo https://download.docker.com/linux/rhel/docker-ce.repo &>/dev/null
-            print_ok "Docker CE repository added"
-        fi
-        
-        # Install Docker CE and plugins
-        if dnf install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin &>/dev/null; then
-            systemctl enable docker &>/dev/null
-            systemctl start docker &>/dev/null
-            
-            docker_version=$(docker --version 2>/dev/null | cut -d' ' -f3 | tr -d ',')
-            compose_version=$(docker compose version 2>/dev/null | cut -d' ' -f4)
-            print_ok "Docker CE installed (v$docker_version)"
-            print_ok "Docker Compose (v$compose_version)"
-            print_ok "Docker service enabled and started"
-        else
-            print_error "Failed to install Docker CE"
+            print_error "Failed to start firewalld"
         fi
     fi
 
     #---------------------------------------------------------------------------
-    print_step "6" "Installing Python 3.9+"
+    print_step "6" "Disabling SELinux"
     #---------------------------------------------------------------------------
     
-    # Check current Python 3 version
-    current_python=""
-    if command -v python3 >/dev/null 2>&1; then
-        current_python=$(python3 --version 2>&1 | awk '{print $2}')
-        python_major=$(echo "$current_python" | cut -d. -f1)
-        python_minor=$(echo "$current_python" | cut -d. -f2)
+    current_selinux=$(getenforce 2>/dev/null || echo "Unknown")
+    if [[ "$current_selinux" == "Disabled" ]]; then
+        print_ok "SELinux is already disabled"
+    else
+        print_info "Current SELinux mode: $current_selinux"
+        # Set to permissive for current session
+        if setenforce 0 &>/dev/null; then
+            print_ok "SELinux set to permissive (current session)"
+        fi
         
-        if [[ "$python_major" -ge 3 && "$python_minor" -ge 9 ]]; then
-            print_ok "Python $current_python already installed"
+        # Disable permanently in config
+        if [[ -f /etc/selinux/config ]]; then
+            sed -i 's/^SELINUX=enforcing/SELINUX=disabled/' /etc/selinux/config
+            sed -i 's/^SELINUX=permissive/SELINUX=disabled/' /etc/selinux/config
+            print_ok "SELinux disabled in config (will be disabled after reboot)"
         else
-            print_info "Current Python $current_python is older than 3.9"
+            # Create SELinux config directory and file
+            mkdir -p /etc/selinux
+            cat > /etc/selinux/config <<EOF
+# This file controls the state of SELinux on the system.
+# SELINUX= can take one of these three values:
+#     enforcing - SELinux security policy is enforced.
+#     permissive - SELinux prints warnings instead of enforcing.
+#     disabled - No SELinux policy is loaded.
+SELINUX=disabled
+# SELINUXTYPE= can take one of these three values:
+#     targeted - Targeted processes are protected,
+#     minimum - Modification of targeted policy. Only selected processes are protected.
+#     mls - Multi Level Security protection.
+SELINUXTYPE=targeted
+EOF
+            print_ok "SELinux config created and set to disabled"
         fi
     fi
+
+    #---------------------------------------------------------------------------
+    print_step "7" "Update Root Password (Optional)"
+    #---------------------------------------------------------------------------
     
-    # Install Python 3.11 (latest stable available in repos)
-    if ! command -v python3.11 >/dev/null 2>&1; then
-        print_info "Installing Python 3.11..."
-        if dnf install -y python3.11 python3.11-pip python3.11-devel &>/dev/null; then
-            print_ok "Python 3.11 installed"
-            print_info "Use 'python3.11' or 'pip3.11' to access Python 3.11"
+    echo ""
+    read -p "  Enter new root password (leave blank to skip): " new_root_password
+    
+    if [[ -n "$new_root_password" ]]; then
+        if echo "root:$new_root_password" | chpasswd; then
+            print_ok "Root password updated successfully"
         else
-            print_warn "Failed to install Python 3.11, trying Python 3.9..."
-            if dnf install -y python3.9 python3.9-pip python3.9-devel &>/dev/null; then
-                print_ok "Python 3.9 installed"
-                print_info "Use 'python3.9' or 'pip3.9' to access Python 3.9"
-            else
-                print_error "Failed to install Python 3.9+"
-            fi
+            print_error "Failed to update root password"
         fi
     else
-        print_ok "Python 3.11 already installed"
-    fi
-    
-    # Note: We don't change system python3 to avoid breaking system tools like ipa-client-install
-    # Users can manually set alternatives or use python3.11/python3.9 directly
-    
-    # Display available Python versions
-    if command -v python3.11 >/dev/null 2>&1; then
-        py_version=$(python3.11 --version 2>&1)
-        print_ok "$py_version available as python3.11"
-    elif command -v python3.9 >/dev/null 2>&1; then
-        py_version=$(python3.9 --version 2>&1)
-        print_ok "$py_version available as python3.9"
+        print_info "Root password unchanged"
     fi
 
     #---------------------------------------------------------------------------
@@ -950,6 +935,7 @@ function install_desktop() {
 # Prompt user to enter AD/LDAP group names (up to 4)
 function get_ad_user_groups() {
     local title="$1"
+    local domain="$2"
     local groups=""
 
     echo ""
@@ -960,11 +946,31 @@ function get_ad_user_groups() {
         read -p "  [$index] Group name (blank to finish): " group_name
         [[ -z "$group_name" ]] && break
         
-        if ! getent group "$group_name" &>/dev/null; then
+        # Check if group exists, handling both fully qualified and short format
+        local group_found=false
+        
+        # If domain is provided and group name doesn't contain @, try with domain suffix
+        if [[ -n "$domain" && ! "$group_name" =~ @ ]]; then
+            # Try with fully qualified name first (SSSD config may not be effective yet)
+            if getent group "${group_name}@${domain}" &>/dev/null; then
+                group_found=true
+            elif getent group "$group_name" &>/dev/null; then
+                group_found=true
+            fi
+        else
+            # Check as-is
+            if getent group "$group_name" &>/dev/null; then
+                group_found=true
+            fi
+        fi
+        
+        if ! $group_found; then
             print_warn "Group '$group_name' not found in directory"
             continue
         fi
-        groups+="$group_name "
+        
+        # Store group name without domain suffix for realm permit
+        groups+="${group_name%@*} "
         index=$((index + 1))
     done
 
@@ -1106,7 +1112,7 @@ function enroll_domain() {
             ["fallback_homedir"]="/home/%u"
             ["ad_gpo_access_control"]="disabled"
             ["ad_gpo_map_remote_interactive"]="+xrdp-sesman"
-            ["default_shell"]="bash"
+            ["default_shell"]="/bin/bash"
         )
 
         for key in "${!settings[@]}"; do
@@ -1125,10 +1131,10 @@ function enroll_domain() {
         print_step "3" "Configuring Access Permissions"
         #-----------------------------------------------------------------------
         
-        get_ad_user_groups "Add groups with sudo access (up to 4)"
+        get_ad_user_groups "Add groups with sudo access (up to 4)" "$domain_name"
         admin_groups="$USER_GROUPS"
 
-        get_ad_user_groups "Add groups with regular access (up to 4)"
+        get_ad_user_groups "Add groups with regular access (up to 4)" "$domain_name"
         access_groups="$USER_GROUPS"
 
         # Configure sudoers for admin groups
@@ -1159,21 +1165,120 @@ function enroll_domain() {
     fi
 }
 
-# Install development tools and libraries
-function install_devtools() {
-    print_header "Development Tools Installation"
+# Install Docker CE
+function install_docker_ce() {
+    print_header "Docker CE Installation"
+    
+    local os_version
+    os_version=$(rpm -E %rhel)
+    
+    #---------------------------------------------------------------------------
+    print_step "1" "Installing Docker CE"
+    #---------------------------------------------------------------------------
+    
+    if command -v docker >/dev/null 2>&1; then
+        docker_version=$(docker --version 2>/dev/null | cut -d' ' -f3 | tr -d ',')
+        compose_version=$(docker compose version 2>/dev/null | cut -d' ' -f4)
+        print_ok "Docker CE already installed (v$docker_version)"
+        [[ -n "$compose_version" ]] && print_ok "Docker Compose (v$compose_version)"
+    else
+        # Add Docker repository based on region
+        if [[ "$COUNTRY" == "CN" ]]; then
+            cat <<EOF > /etc/yum.repos.d/docker-ce.repo
+[docker-ce-stable]
+name=Docker CE Stable - \$basearch
+baseurl=https://mirrors.nju.edu.cn/docker-ce/linux/rhel/${os_version}/\$basearch/stable
+enabled=1
+gpgcheck=0
+gpgkey=https://mirrors.nju.edu.cn/docker-ce/linux/rhel/gpg
+EOF
+            print_ok "Docker CE repository (NJU mirror)"
+        else
+            dnf config-manager --add-repo https://download.docker.com/linux/rhel/docker-ce.repo &>/dev/null
+            print_ok "Docker CE repository added"
+        fi
+        
+        # Install Docker CE and plugins
+        if dnf install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin &>/dev/null; then
+            systemctl enable docker &>/dev/null
+            systemctl start docker &>/dev/null
+            
+            docker_version=$(docker --version 2>/dev/null | cut -d' ' -f3 | tr -d ',')
+            compose_version=$(docker compose version 2>/dev/null | cut -d' ' -f4)
+            print_ok "Docker CE installed (v$docker_version)"
+            print_ok "Docker Compose (v$compose_version)"
+            print_ok "Docker service enabled and started"
+        else
+            print_error "Failed to install Docker CE"
+        fi
+    fi
+    
+    echo ""
+    echo -e "${Green}${Bold}✓ Docker CE installation completed${Reset}"
+    echo ""
+}
 
-    local dev_packages=(
-        "kernel-devel" "kernel-headers" "bison" "flex" "gdb" "strace" 
-        "ltrace" "valgrind" "ncurses-devel" "libtool" "pkgconfig" 
-        "openssl-devel"  "libcurl-devel" "libxml2-devel" 
-        "zlib-devel" "bzip2-devel"  "xz-devel"  "libffi-devel"
-        "python3-devel"  "perl-devel"  "java-11-openjdk-devel"
-        "gcc" "make" "ncurses-devel" "gnutls-devel" "libX11-devel" "libXext-devel" 
-        "libXfixes-devel" "libXft-devel" "libXt-devel" "libXi-devel" "gtk3-devel" 
-        "libpng-devel" "libjpeg-turbo-devel" "giflib-devel" 
-        "libtiff-devel" "hunspell" "hunspell-en" "python3.9"
-    )
+# Install Python 3.9+
+function install_python39() {
+    print_header "Python 3.9+ Installation"
+    
+    #---------------------------------------------------------------------------
+    print_step "1" "Installing Python 3.9+"
+    #---------------------------------------------------------------------------
+    
+    # Check current Python 3 version
+    current_python=""
+    if command -v python3 >/dev/null 2>&1; then
+        current_python=$(python3 --version 2>&1 | awk '{print $2}')
+        python_major=$(echo "$current_python" | cut -d. -f1)
+        python_minor=$(echo "$current_python" | cut -d. -f2)
+        
+        if [[ "$python_major" -ge 3 && "$python_minor" -ge 9 ]]; then
+            print_ok "Python $current_python already installed"
+        else
+            print_info "Current Python $current_python is older than 3.9"
+        fi
+    fi
+    
+    # Install Python 3.11 (latest stable available in repos)
+    if ! command -v python3.11 >/dev/null 2>&1; then
+        print_info "Installing Python 3.11..."
+        if dnf install -y python3.11 python3.11-pip python3.11-devel &>/dev/null; then
+            print_ok "Python 3.11 installed"
+            print_info "Use 'python3.11' or 'pip3.11' to access Python 3.11"
+        else
+            print_warn "Failed to install Python 3.11, trying Python 3.9..."
+            if dnf install -y python3.9 python3.9-pip python3.9-devel &>/dev/null; then
+                print_ok "Python 3.9 installed"
+                print_info "Use 'python3.9' or 'pip3.9' to access Python 3.9"
+            else
+                print_error "Failed to install Python 3.9+"
+            fi
+        fi
+    else
+        print_ok "Python 3.11 already installed"
+    fi
+    
+    # Note: We don't change system python3 to avoid breaking system tools like ipa-client-install
+    # Users can manually set alternatives or use python3.11/python3.9 directly
+    
+    # Display available Python versions
+    if command -v python3.11 >/dev/null 2>&1; then
+        py_version=$(python3.11 --version 2>&1)
+        print_ok "$py_version available as python3.11"
+    elif command -v python3.9 >/dev/null 2>&1; then
+        py_version=$(python3.9 --version 2>&1)
+        print_ok "$py_version available as python3.9"
+    fi
+    
+    echo ""
+    echo -e "${Green}${Bold}✓ Python installation completed${Reset}"
+    echo ""
+}
+
+# Install compilers and build tools
+function install_compilers() {
+    print_header "Compilers and Build Tools Installation"
     
     #---------------------------------------------------------------------------
     print_step "1" "Installing Development Tools Group"
@@ -1183,15 +1288,37 @@ function install_devtools() {
     else
         print_error "Failed to install Development Tools group"
     fi
-
+    
     #---------------------------------------------------------------------------
     print_step "2" "Installing Development Libraries"
     #---------------------------------------------------------------------------
+    
+    local dev_packages=(
+        "kernel-devel" "kernel-headers" "bison" "flex" "gdb" "strace" 
+        "ltrace" "valgrind" "ncurses-devel" "libtool" "pkgconfig" 
+        "openssl-devel"  "libcurl-devel" "libxml2-devel" 
+        "zlib-devel" "bzip2-devel"  "xz-devel"  "libffi-devel"
+        "python3-devel"  "perl-devel"  "java-11-openjdk-devel"
+        "gcc" "make" "ncurses-devel" "gnutls-devel" "libX11-devel" "libXext-devel" 
+        "libXfixes-devel" "libXft-devel" "libXt-devel" "libXi-devel" "gtk3-devel" 
+        "libpng-devel" "libjpeg-turbo-devel" "giflib-devel" 
+        "libtiff-devel" "hunspell" "hunspell-en"
+    )
+    
     print_info "Installing ${#dev_packages[@]} packages..."
     install_applications "${dev_packages[@]}"
+    
+    echo ""
+    echo -e "${Green}${Bold}✓ Compilers and build tools installation completed${Reset}"
+    echo ""
+}
 
+# Install Visual Studio Code
+function install_vscode() {
+    print_header "Visual Studio Code Installation"
+    
     #---------------------------------------------------------------------------
-    print_step "3" "Installing Visual Studio Code"
+    print_step "1" "Installing Visual Studio Code"
     #---------------------------------------------------------------------------
     if ! command -v code &>/dev/null; then
         rpm -v --import https://packages.microsoft.com/keys/microsoft.asc 2>/dev/null
@@ -1213,7 +1340,7 @@ EOF
     fi
 
     #---------------------------------------------------------------------------
-    print_step "4" "Configuring VS Code launch options"
+    print_step "2" "Configuring VS Code launch options"
     #---------------------------------------------------------------------------
     if [[ -f /usr/bin/code ]]; then
         local proxy_line=""
@@ -1259,9 +1386,18 @@ ENDOFCODE
     else
         print_warn "/usr/bin/code not found for launch option patching"
     fi
+    
+    echo ""
+    echo -e "${Green}${Bold}✓ Visual Studio Code installation completed${Reset}"
+    echo ""
+}
 
+# Install EDA (Electronic Design Automation) libraries
+function install_eda_libraries() {
+    print_header "EDA Libraries Installation"
+    
     #---------------------------------------------------------------------------
-    print_step "5" "Installing EDA (Electronic Design Automation) Packages"
+    print_step "1" "Installing EDA (Electronic Design Automation) Packages"
     #---------------------------------------------------------------------------
     
     # EDA packages for electronic design, simulation, and CAD tools
@@ -1285,10 +1421,47 @@ ENDOFCODE
 
     print_info "Installing ${#eda_packages[@]} EDA packages..."
     install_applications "${eda_packages[@]}"
+    
+    echo ""
+    echo -e "${Green}${Bold}✓ EDA libraries installation completed${Reset}"
+    echo ""
+}
 
-    echo ""
-    echo -e "${Green}${Bold}✓ Development tools installation completed${Reset}"
-    echo ""
+# Install development tools and libraries
+function install_devtools() {
+    print_header "Development Tools Installation"
+
+    while true; do
+        local devtools_options=(
+            "Install Compilers and Build Tools" 
+            "Install Python 3.9+" 
+            "Install Docker CE" 
+            "Install VS Code" 
+            "Install EDA Libraries" 
+            "Install All" 
+            "Back to main menu"
+        )
+        show_menu "Development Tools Options" 7 "${devtools_options[@]}"
+
+        case $menu_index in
+            0) install_compilers;;
+            1) install_python39;;
+            2) install_docker_ce;;
+            3) install_vscode;;
+            4) install_eda_libraries;;
+            5) 
+                install_compilers
+                install_python39
+                install_docker_ce
+                install_vscode
+                install_eda_libraries
+                echo ""
+                echo -e "${Green}${Bold}✓ All development tools installation completed${Reset}"
+                echo ""
+                ;;
+            6) return;;
+        esac
+    done
 }
 
 # Network configuration menu
