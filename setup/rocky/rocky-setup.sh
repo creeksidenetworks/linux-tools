@@ -30,11 +30,6 @@ Bold=$(tput bold)
 Reset=$(tput sgr0)
 Dim=$(tput dim)
 
-#===============================================================================
-# Output Helper Functions
-#===============================================================================
-
-# Print a section header with box border
 print_header() {
     local title="$1"
     local width=60
@@ -45,7 +40,6 @@ print_header() {
     printf "${Cyan}%s${Reset}\n" "$(printf '═%.0s' $(seq 1 $width))"
 }
 
-# Print a step header
 print_step() {
     local step_num="$1"
     local title="$2"
@@ -54,27 +48,22 @@ print_step() {
     echo -e "${Dim}$(printf '─%.0s' $(seq 1 50))${Reset}"
 }
 
-# Print success message
 print_ok() {
     echo -e "  ${Green}✓${Reset} $1"
 }
 
-# Print warning message  
 print_warn() {
     echo -e "  ${Yellow}⚠${Reset} $1"
 }
 
-# Print error message
 print_error() {
     echo -e "  ${Red}✗${Reset} $1"
 }
 
-# Print info message
 print_info() {
     echo -e "  ${Blue}ℹ${Reset} $1"
 }
 
-# Print a summary box
 print_summary() {
     local title="$1"
     shift
@@ -87,8 +76,6 @@ print_summary() {
     echo -e "${Cyan}└$(printf '─%.0s' $(seq 1 40))${Reset}"
 }
 
-# Regional options - parallel arrays for country codes, display names, and timezones
-# Add new regions by appending to all three arrays in the same order
 countries=("CN" "GB" "AE" "US")
 regions=("China" "UK" "UAE" "USA")
 timezones=("Asia/Shanghai" "Europe/London" "Asia/Dubai" "America/Los_Angeles")
@@ -96,9 +83,6 @@ timezones=("Asia/Shanghai" "Europe/London" "Asia/Dubai" "America/Los_Angeles")
 COUNTRY=""
 TIMEZONE="UTC"
 
-# Mirror options - associative arrays mapping country codes to mirror URLs
-# BASE_MIRRORS: Rocky Linux base repository mirrors
-# EPEL_MIRRORS: Extra Packages for Enterprise Linux mirrors
 declare -A BASE_MIRRORS
 declare -A EPEL_MIRRORS
 BASE_MIRRORS["US"]="http://dl.rockylinux.org"
@@ -112,11 +96,9 @@ EPEL_MIRRORS["AE"]="http://dl.fedoraproject.org/pub/epel"
 #BASE_MIRRORS["AE"]="https://mirror.ourhost.az/rockylinux/"
 #EPEL_MIRRORS["AE"]="https://mirror.yer.az/fedora-epel/"
 
-# Create temporary file for script operations and ensure cleanup on exit
 tmp_file=$(mktemp /tmp/rocky-setup.XXXXXX)
 trap cleanup_existing EXIT
 
-# Cleanup function - called on script exit (normal or interrupted)
 function cleanup_existing() {
     echo ""
     echo -e "${Dim}Cleaning up and exiting...${Reset}"
@@ -134,9 +116,7 @@ function download_apps() {
 
 }   
 
-# Add SSH keys to root authorized_keys
 function add_root_ssh_keys() {
-    # Only run as root
     if [[ $(id -u) -ne 0 ]]; then
         echo "This operation must be run as root. Please re-run as root or with sudo."
         exit 1
@@ -150,12 +130,10 @@ function add_root_ssh_keys() {
         "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQChzHPb3CTFUwEPCm1sZQUwiJIWhrw8PtuKWyOOgBjPCGVbavRjHDKlaXSgh3JtEBovQX0CLvqR+dMDJEjYGCRQRyfLT84K7ozEbfw8tX+IlWrLGQ7t6bZQjp1d70ulFWWVwTFLtcA3RGONSAR+Jt0zTzkhFCjPp8CagRe7nY7KNh3kE7y19OlWoP4eNw0ZAaMcUajKd6YJXYs4LnpoyM2lrWZRssa3kiPxzpyJj9z0mrc5hH6WmrKyPAuJO4GuFXNUwGre/H5DIoXUgzmZZTbusE25exGkKpweFo4M/CxB2szebr0XKViwYrp3sT0ELUk92cJC65HkmFTrj/Fq49VEXJ3Z3fwoootyhPFQ/Gk5JrJ+bNsvSRRBS+m7f/afOq9m5jvx907nnP8HN9W0pJkrmJkzz7Lvzm7BfaMMJ9TUWf9olroLXWy+VkH8RdW0MKz7zZ1sCLhIerZz1iUtkVhPTjRYmWQZtFgSc7b4hhm6Xw7bGMhRZa91SJTt3MzUeM8= jsong@creekside.network"
     )
 
-    # Ensure .ssh directory exists
     if [[ ! -d "$ssh_dir" ]]; then
         mkdir -p "$ssh_dir"
         chmod 700 "$ssh_dir"
     fi
-    # Ensure authorized_keys file exists
     if [[ ! -f "$authorized_keys_file" ]]; then
         touch "$authorized_keys_file"
         chmod 600 "$authorized_keys_file"
@@ -168,19 +146,11 @@ function add_root_ssh_keys() {
     done
 }
 
-# Generic menu function - displays numbered options and captures user selection
-# Arguments:
-#   $1: Menu title
-#   $2: Default option (1-based index, optional)
-#   $@: Menu options (remaining arguments)
-# Sets global variable:
-#   menu_index: 0-based index of selected option
 function show_menu() {
     local title="$1"
     shift
     local default_choice=0
     
-    # Check if second argument is a number (default choice)
     if [[ "$1" =~ ^[0-9]+$ ]]; then
         default_choice=$1
         shift
@@ -200,7 +170,6 @@ function show_menu() {
     fi
     read user_choice
     
-    # Use default if empty or invalid input
     if [[ -z "$user_choice" ]]; then
         user_choice=$default_choice
     fi
@@ -214,35 +183,24 @@ function show_menu() {
     menu_index=$((user_choice-1))
 }
 
-# Detect geographic location using public IP geolocation API
-# Sets global variables: COUNTRY, TIMEZONE
-# Falls back to manual selection if detection fails
 function detect_location() {
-    # Get geolocation info from public IP with timeout
     GEOINFO=$(curl -s --max-time 5 http://ip-api.com/json/)
     if [[ -n "$GEOINFO" && "$GEOINFO" != "{}" ]]; then
         COUNTRY=$(echo "$GEOINFO" | grep -o '"countryCode":"[^"]*"' | cut -d':' -f2 | tr -d '"')
         TIMEZONE=$(echo "$GEOINFO" | grep -o '"timezone":"[^"]*"' | cut -d':' -f2 | tr -d '"')
-        #echo -e "✓ Detected location: Country=$COUNTRY, Timezone=$TIMEZONE"
     fi
     if [[ -z "$COUNTRY" ]] || [[ ! " ${countries[@]} " =~ " $COUNTRY " ]]; then
         echo -e "⚠️  Could not retrieve geolocation info, use USA as default."
-        # Set default to USA, user can change later
         COUNTRY="US"
         TIMEZONE="America/Los_Angeles"
     fi
-    # Export variables for use in initialization
     export COUNTRY TIMEZONE
 }
 
-# Interactive menu to select country for yum mirror
-# Detects current location and offers it as default
 function select_mirror_country() {
-    # Auto-detect location first
     detect_location
     local detected_country="$COUNTRY"
     
-    # Find the index of detected country
     local default_index=0
     for i in "${!countries[@]}"; do
         if [[ "${countries[$i]}" == "$detected_country" ]]; then
@@ -251,7 +209,6 @@ function select_mirror_country() {
         fi
     done
     
-    # Build menu options
     local menu_options=()
     for i in "${!countries[@]}"; do
         local country_code="${countries[$i]}"
@@ -265,21 +222,16 @@ function select_mirror_country() {
         fi
     done
     
-    # Show menu with detected country as default
     show_menu "Select Yum Mirror Country:" "$((default_index+1))" "${menu_options[@]}"
     
-    # Use selected country
     COUNTRY="${countries[$menu_index]}"
     
     export COUNTRY
     echo -e "${Green}✓${Reset} Selected mirror country: $COUNTRY (${regions[$menu_index]})\n"
 }
 
-# Configure yum repository mirrors based on detected/selected country
-# Updates both Rocky Linux base repos and EPEL repos
 function yum_configure_mirror() {
     country="$1"
-    # Let user select mirror country (with auto-detection as default)
     if [[ -z "$country" ]]; then
         select_mirror_country
     fi
@@ -288,13 +240,11 @@ function yum_configure_mirror() {
     baseos_url="${BASE_MIRRORS[$COUNTRY]}"
     epel_url="${EPEL_MIRRORS[$COUNTRY]}"
     
-    # Fallback to US if country not found in mirrors
     if [[ -z "$baseos_url" ]]; then
         baseos_url="${BASE_MIRRORS[US]}"
         epel_url="${EPEL_MIRRORS[US]}"
     fi
 
-    # Update Rocky repos - need to handle BaseOS, AppStream, extras, etc.
     shopt -s nocaseglob
     for repo in /etc/yum.repos.d/rocky*.repo; do
         [[ ! -f "$repo" ]] && continue
@@ -338,7 +288,6 @@ function yum_configure_mirror() {
     shopt -u nocaseglob
     print_ok "Rocky Linux repos → $baseos_url"
 
-    # Update EPEL repos
     for repo in /etc/yum.repos.d/epel*.repo; do
         [[ ! -f "$repo" ]] && continue
         
@@ -356,8 +305,6 @@ function yum_configure_mirror() {
 }
 
 # Install packages using dnf, skipping already-installed packages
-# Arguments: List of package names to install
-# Outputs success/failure message for each package
 function install_applications() {
     local packages=("$@")
     local installed=0
@@ -375,14 +322,12 @@ function install_applications() {
         fi
     done
     
-    # Summary line
     local summary="Installed: $installed"
     [[ $skipped -gt 0 ]] && summary+=", Skipped: $skipped"
     [[ $failed -gt 0 ]] && summary+=", Failed: $failed"
     print_ok "$summary"
 }
 
-# Main initialization routine - performs complete system setup
 function initialization() {
     print_header "System Initialization"
 
@@ -443,7 +388,6 @@ function initialization() {
     print_step "1" "Configuring System Settings"
     #---------------------------------------------------------------------------
     
-    # Configure yum proxy
     if [[ -n "$proxy_url" ]]; then
         if grep -q "^proxy=" /etc/yum.conf; then
             sudo sed -i "s|^proxy=.*|proxy=$proxy_url|" /etc/yum.conf
@@ -464,17 +408,14 @@ EOF
         fi
     fi
 
-    # Set timezone
     sudo timedatectl set-timezone "${TIMEZONE}"
     print_ok "Timezone: ${TIMEZONE}"
 
-    # Set hostname
     if [[ -n "$new_hostname" ]]; then
         sudo hostnamectl set-hostname "$new_hostname"
         print_ok "Hostname: $new_hostname"
     fi
 
-    # Disable SELinux
     sudo setenforce 0 2>/dev/null || true
     sudo sed -i 's/^SELINUX=.*/SELINUX=disabled/' /etc/selinux/config
     print_ok "SELinux disabled"
@@ -483,7 +424,6 @@ EOF
     print_step "2" "Configuring Repositories"
     #---------------------------------------------------------------------------
     
-    # Install EPEL
     if ! dnf repolist enabled | grep -q epel 2>/dev/null; then
         if dnf install -y epel-release &>/dev/null; then
             dnf makecache -y &>/dev/null
@@ -496,7 +436,6 @@ EOF
         print_ok "EPEL repository (already installed)"
     fi 
 
-    # Enable PowerTools/CRB
     if [[ $os_version == "8" ]]; then
         yum config-manager --set-enabled powertools &>/dev/null
         print_ok "PowerTools repository enabled"
@@ -505,7 +444,6 @@ EOF
         print_ok "CRB repository enabled"
     fi
 
-    # Configure RPM Fusion repos
     cat <<EOF > /etc/yum.repos.d/rpmfusion-free.repo
 [rpmfusion-free-updates]
 name=RPM Fusion for EL ${os_version} - Free - Updates
@@ -525,7 +463,6 @@ gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-rpmfusion-nonfree-el-${os_version}
 EOF
     print_ok "RPM Fusion repositories enabled"
 
-    # Configure yum mirrors
     yum_configure_mirror "$COUNTRY"
 
     #---------------------------------------------------------------------------
@@ -545,7 +482,7 @@ EOF
     
     local default_packages=(
         "zsh" "ksh" "tcsh" "xterm" "ethtool" "vim"
-        "yum-utils" "util-linux" "tree"  
+        "yum-utils" "util-linux" "tree" "ncurses" 
         "nano" "ed" "fontconfig" "nedit" "htop" "pwgen"
         "nfs-utils" "cifs-utils" "samba-client" "autofs" 
         "subversion" "ansible" "git"
@@ -1004,7 +941,6 @@ update_setting() {
     local section="$3"
     local conf_file="$4"
 
-    # Check if the setting exists in the domain section
     if grep -q "^[[:space:]]*$key[[:space:]]*=[[:space:]]*" "$conf_file"; then
         # Replace existing line
         sed -i "/^\[${section}\//,/^\[/ s|^[[:space:]]*$key[[:space:]]*=[[:space:]]*.*|$key = $value|" "$conf_file"
@@ -1017,6 +953,14 @@ update_setting() {
 # Enroll host to Active Directory or FreeIPA domain
 function enroll_domain() {
     print_header "Domain Enrollment"
+
+    #---------------------------------------------------------------------------
+    print_step "1" "Installing Required Packages"
+    #---------------------------------------------------------------------------
+    
+    local domain_packages=("realmd" "ipa-client" "oddjob" "oddjob-mkhomedir" "sssd" "sssd-tools" "adcli" "samba-common-tools" "krb5-workstation")
+        
+    install_applications "${domain_packages[@]}"
 
     # Check if already joined
     current_domain=$(realm list | grep domain-name | cut -d ':' -f 2 | xargs)
@@ -1081,10 +1025,9 @@ function enroll_domain() {
     done
 
     #---------------------------------------------------------------------------
-    print_step "1" "Joining Domain"
+    print_step "2" "Joining Domain"
     #---------------------------------------------------------------------------
     
-    # Set hostname
     sudo hostnamectl set-hostname "$fqdn_hostname"
     print_ok "Hostname set to $fqdn_hostname"
 
@@ -1114,7 +1057,7 @@ function enroll_domain() {
         fi
 
         #-----------------------------------------------------------------------
-        print_step "2" "Configuring SSSD"
+        print_step "3" "Configuring SSSD"
         #-----------------------------------------------------------------------
         # Update SSSD configuration in-place
         SSSD_CONF="/etc/sssd/sssd.conf"
@@ -1142,7 +1085,7 @@ function enroll_domain() {
         print_ok "SSSD cache cleared and service restarted"
 
         #-----------------------------------------------------------------------
-        print_step "3" "Configuring Access Permissions"
+        print_step "4" "Configuring Access Permissions"
         #-----------------------------------------------------------------------
         
         get_ad_user_groups "Add groups with sudo access (up to 4)" "$domain_name"
@@ -1240,7 +1183,6 @@ function install_python39() {
     print_step "1" "Installing Python 3.9+"
     #---------------------------------------------------------------------------
     
-    # Check current Python 3 version
     current_python=""
     if command -v python3 >/dev/null 2>&1; then
         current_python=$(python3 --version 2>&1 | awk '{print $2}')
@@ -1254,7 +1196,6 @@ function install_python39() {
         fi
     fi
     
-    # Install Python 3.11 (latest stable available in repos)
     if ! command -v python3.11 >/dev/null 2>&1; then
         print_info "Installing Python 3.11..."
         if dnf install -y python3.11 python3.11-pip python3.11-devel &>/dev/null; then
@@ -1273,10 +1214,6 @@ function install_python39() {
         print_ok "Python 3.11 already installed"
     fi
     
-    # Note: We don't change system python3 to avoid breaking system tools like ipa-client-install
-    # Users can manually set alternatives or use python3.11/python3.9 directly
-    
-    # Display available Python versions
     if command -v python3.11 >/dev/null 2>&1; then
         py_version=$(python3.11 --version 2>&1)
         print_ok "$py_version available as python3.11"
@@ -1386,7 +1323,6 @@ VSCODE_PATH="$(dirname "$(readlink -f "$0")")"
 if [[ -f "$VSCODE_PATH/code.bak" ]]; then
     ELECTRON_RUN_AS_NODE=1 exec "$VSCODE_PATH/code.bak" "$VSCODE_PATH/code.bak" $VSCODE_CLI_OPTIONS "$@"
 else
-    # Fallback to standard electron location
     ELECTRON="$VSCODE_PATH/../lib/code/code"
     CLI="$VSCODE_PATH/../lib/code/out/cli.js"
     ELECTRON_RUN_AS_NODE=1 exec "$ELECTRON" "$CLI" $VSCODE_CLI_OPTIONS "$@"
@@ -1414,8 +1350,6 @@ function install_eda_libraries() {
     print_step "1" "Installing EDA (Electronic Design Automation) Packages"
     #---------------------------------------------------------------------------
     
-    # EDA packages for electronic design, simulation, and CAD tools
-    # Updated from CentOS 7 for Rocky 8/9 compatibility
     local eda_packages=(
         "gtkwave" "gdk-pixbuf2" "gdk-pixbuf2.i686" "gtk2" "gtk2.i686"
         "gtk3" "gtk3.i686" "motif" "motif.i686" "libXpm" "libXpm.i686"
@@ -1486,7 +1420,6 @@ function update_network_settings() {
     print_info "Checking network management tools..."
     install_applications "${net_tools[@]}"
 
-    # Ensure NetworkManager is running
     if ! systemctl is-active --quiet NetworkManager; then
         systemctl enable NetworkManager &>/dev/null
         systemctl start NetworkManager &>/dev/null
@@ -1544,20 +1477,11 @@ function calculate_default_gateway() {
     local ip="$1"
     local cidr="$2"
     
-    # Convert IP to decimal
     IFS=. read -r i1 i2 i3 i4 <<< "$ip"
     local ip_dec=$((i1 * 256**3 + i2 * 256**2 + i3 * 256 + i4))
-    
-    # Calculate network mask using bit shifting
-    local mask_dec=$(( (0xFFFFFFFF << (32 - cidr)) & 0xFFFFFFFF ))
-    
-    # Calculate broadcast address (last IP in subnet)
+    local mask_dec=$(( (0xFFFFFFFF << (32 - cidr)) & 0xFFFFFFFF ))    
     local broadcast_dec=$(( (ip_dec & mask_dec) | (~mask_dec & 0xFFFFFFFF) ))
-    
-    # Gateway is broadcast - 1 (last usable IP)
     local gateway_dec=$((broadcast_dec - 1))
-    
-    # Convert back to dotted notation
     echo "$((gateway_dec >> 24 & 0xFF)).$((gateway_dec >> 16 & 0xFF)).$((gateway_dec >> 8 & 0xFF)).$((gateway_dec & 0xFF))"
 }
 
@@ -1714,7 +1638,6 @@ function configure_interface() {
     local all_interfaces=($(get_interfaces_array))
     local interfaces=()
     
-    # Filter out bond slaves
     for iface in "${all_interfaces[@]}"; do
         [[ ! -d "/sys/class/net/$iface/master" ]] && interfaces+=("$iface")
     done
@@ -1727,7 +1650,6 @@ function configure_interface() {
     interfaces+=("Return to network menu")
     show_menu "Select interface" ${#interfaces[@]} "${interfaces[@]}"
     
-    # Check if user selected return option
     if [[ $menu_index -eq $((${#interfaces[@]} - 1)) ]]; then
         return
     fi
@@ -1739,7 +1661,6 @@ function configure_interface() {
     local new_iface_name="$selected_iface"
     local rename_required=false
     
-    # Get existing connection name if it exists
     local existing_conn=$(nmcli -t -f NAME,DEVICE connection show | grep ":$selected_iface$" | cut -d: -f1 | head -1)
     [[ -n "$existing_conn" ]] && conn_name="$existing_conn"
     
@@ -1815,12 +1736,10 @@ function configure_interface() {
         fi
     done
     
-    # Check if this is the default route interface (SSH connection risk)
     local default_iface=$(ip route show default 2>/dev/null | awk '{print $5}' | head -1)
     local is_default_route="N"
     [[ "$selected_iface" == "$default_iface" ]] && is_default_route="Y"
     
-    # Apply interface rename if requested (create udev rule)
     if [[ "$rename_required" == true ]]; then
         # Create udev rule for persistent naming
         local udev_rule="/etc/udev/rules.d/70-persistent-net-${new_iface_name}.rules"
@@ -1833,7 +1752,6 @@ EOF
         print_ok "Udev rule created for interface rename"
     fi
     
-    # Calculate prefix from netmask if static IP
     local prefix=""
     local ipv4_addr=""
     local dns_servers=""
@@ -1844,7 +1762,6 @@ EOF
         [[ -n "$dns2" ]] && dns_servers="$dns1 $dns2"
     fi
     
-    # When renaming, use new name for connection; otherwise use current name
     local final_conn_name="$selected_iface"
     local final_iface_name="$selected_iface"
     if [[ "$rename_required" == true ]]; then
@@ -1878,7 +1795,6 @@ EOF
         print_ok "Connection created: $final_conn_name"
     fi
     
-    # Apply changes: reboot for default route interface or rename, down/up for others
     if [[ "$is_default_route" == "Y" ]] || [[ "$rename_required" == true ]]; then
         echo ""
         if [[ "$rename_required" == true ]]; then
@@ -1938,7 +1854,6 @@ function rename_interface() {
     local all_interfaces=($(get_interfaces_array))
     local interfaces=()
     
-    # Filter out bond slaves and virtual interfaces
     for iface in "${all_interfaces[@]}"; do
         [[ ! -d "/sys/class/net/$iface/master" ]] && [[ ! "$iface" =~ \. ]] && [[ ! "$iface" =~ ^bond ]] && interfaces+=("$iface")
     done
@@ -1951,7 +1866,6 @@ function rename_interface() {
     interfaces+=("Return to network menu")
     show_menu "Select interface to rename" ${#interfaces[@]} "${interfaces[@]}"
     
-    # Check if user selected return option
     if [[ $menu_index -eq $((${#interfaces[@]} - 1)) ]]; then
         return
     fi
@@ -1996,7 +1910,6 @@ function rename_interface() {
         return
     fi
     
-    # Create udev rule for persistent naming
     local udev_rule="/etc/udev/rules.d/70-persistent-net-${new_name}.rules"
     cat > "$udev_rule" <<EOF
 # Generated by rocky-setup.sh on $(date)
@@ -2007,7 +1920,6 @@ EOF
     chmod 644 "$udev_rule"
     print_ok "Udev rule created: $udev_rule"
     
-    # Update NetworkManager connection if it exists
     local existing_conn=$(nmcli -t -f NAME,DEVICE connection show | grep ":$selected_iface$" | cut -d: -f1 | head -1)
     if [[ -n "$existing_conn" ]]; then
         nmcli connection modify "$existing_conn" connection.interface-name "$new_name" &>/dev/null
@@ -2135,7 +2047,6 @@ function create_bond_interface() {
         fi
     done
     
-    # Create bond using NetworkManager
     local bond_mode_param=""
     case $bond_mode in
         "balance-rr") bond_mode_param="balance-rr";;
@@ -2147,7 +2058,6 @@ function create_bond_interface() {
         "balance-alb") bond_mode_param="balance-alb";;
     esac
     
-    # Create bond connection
     if [[ "$bootproto" == "dhcp" ]]; then
         nmcli connection add type bond con-name "$bond_name" ifname "$bond_name" \
             bond.options "mode=$bond_mode_param,miimon=100" \
@@ -2186,7 +2096,6 @@ function create_bond_interface() {
     
     print_ok "Bond $bond_name created"
     
-    # Add slave interfaces to bond
     for slave in "${slaves[@]}"; do
         # Delete existing connection for slave if it exists
         local existing_conn=$(nmcli -t -f NAME,DEVICE connection show | grep ":$slave$" | cut -d: -f1 | head -1)
@@ -2200,7 +2109,6 @@ function create_bond_interface() {
         print_ok "Added slave: $slave"
     done
     
-    # Activate the bond
     nmcli connection up "$bond_name" &>/dev/null
     
     print_ok "Bond configuration applied using NetworkManager"
@@ -2216,7 +2124,6 @@ function create_vlan_interface() {
     local all_interfaces=($(get_interfaces_array))
     local available_interfaces=()
     
-    # Get all non-VLAN interfaces (physical, bond, etc.)
     for iface in "${all_interfaces[@]}"; do
         [[ ! "$iface" =~ \. ]] && available_interfaces+=("$iface")
     done
@@ -2305,7 +2212,6 @@ function create_vlan_interface() {
         fi
     done
     
-    # Create VLAN using NetworkManager
     if [[ "$bootproto" == "dhcp" ]]; then
         nmcli connection add type vlan con-name "$vlan_name" ifname "$vlan_name" \
             dev "$parent_iface" \
@@ -2345,7 +2251,6 @@ function create_vlan_interface() {
         fi
     fi
     
-    # Activate the VLAN
     nmcli connection up "$vlan_name" &>/dev/null
     
     print_ok "VLAN configuration applied using NetworkManager"
@@ -2402,20 +2307,16 @@ function install_xrdp() {
     #---------------------------------------------------------------------------
     local xrdp_ini="/etc/xrdp/xrdp.ini"
 
-    # Enable channels
     sed -i 's/^allow_channels=.*/allow_channels=true/' "$xrdp_ini" 2>/dev/null || echo "allow_channels=true" >> "$xrdp_ini"
 
-    # Drive remap
     if [[ "$allow_drivemap" == "Y" ]]; then
         sed -i 's/^rdpdr=.*/rdpdr=true/' "$xrdp_ini" 2>/dev/null
     else
         sed -i 's/^rdpdr=.*/rdpdr=false/' "$xrdp_ini" 2>/dev/null
     fi
 
-    # Sound
     sed -i 's/^rdpsnd=.*/rdpsnd=true/' "$xrdp_ini" 2>/dev/null
 
-    # Clipboard
     if [[ "$allow_clipboard" == "Y" ]]; then
         sed -i 's/^cliprdr=.*/cliprdr=true/' "$xrdp_ini" 2>/dev/null
     else
@@ -2460,229 +2361,7 @@ function install_xrdp() {
     echo -e "${Green}${Bold}✓ xrdp installation completed${Reset}"
     echo ""
 }
-
-# Install RealVNC Server
-function install_realvnc() {
-    print_header "RealVNC Server Installation"
-
-    local vnc_server_url="https://downloads.realvnc.com/download/file/vnc.files/VNC-Server-6.9.1-Linux-x64.rpm"
-
-    if rpm -q --quiet realvnc-vnc-server; then
-        print_ok "RealVNC Server already installed"
-        return 0
-    fi
-
-    local allow_clipboard="N"
-    local allow_fileshare="N"
-    local license_key=""
-
-    while true; do
-        echo ""
-        # Check if xrdp is installed
-        if rpm -q --quiet xrdp; then
-            print_warn "xrdp is installed and will be removed"
-        fi
-
-        printf "  ${Cyan}1.${Reset} License key (xxxxx-xxxxx-xxxxx-xxxxx-xxxxx): "
-        read license_key
-        if [[ ! "$license_key" =~ ^[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{5}$ ]]; then
-            print_warn "Invalid license key format"
-            continue
-        fi
-
-        printf "  ${Cyan}2.${Reset} Allow clipboard (cut/copy from server)? "
-        read -p "[y/N]: " clipboard_input
-        [[ "$clipboard_input" =~ ^[Yy]$ ]] && allow_clipboard="Y"
-
-        printf "  ${Cyan}3.${Reset} Allow file sharing? "
-        read -p "[y/N]: " fileshare_input
-        [[ "$fileshare_input" =~ ^[Yy]$ ]] && allow_fileshare="Y"
-
-        local summary_items=(
-            "License Key:   ${license_key:0:5}-*****-*****-*****-${license_key: -5}"
-            "Clipboard:     $allow_clipboard"
-            "File Sharing:  $allow_fileshare"
-        )
-        print_summary "RealVNC Configuration" "${summary_items[@]}"
-
-        echo ""
-        read -p "  Proceed with installation? [y/N]: " confirm
-        if [[ "$confirm" =~ ^[Yy]$ ]]; then
-            break
-        else
-            read -p "  Return to remote desktop menu? [y/N]: " return_menu
-            [[ "$return_menu" =~ ^[Yy]$ ]] && return
-        fi
-    done
-
-    #---------------------------------------------------------------------------
-    print_step "1" "Removing Conflicting Packages"
-    #---------------------------------------------------------------------------
-    if rpm -q --quiet xrdp; then
-        dnf remove -y tigervnc tigervnc-server xrdp &>/dev/null
-        firewall-cmd --permanent --remove-port=3389/tcp &>/dev/null
-        print_ok "Removed xrdp and related packages"
-    else
-        print_ok "No conflicting packages found"
-    fi
-
-    #---------------------------------------------------------------------------
-    print_step "2" "Installing X11 Dummy Video Driver"
-    #---------------------------------------------------------------------------
-    # Install official X11 dummy driver (recommended by RealVNC)
-    # Reference: https://help.realvnc.com/hc/en-us/articles/360005081572
-    local dummy_packages=("xorg-x11-drv-dummy")
-    install_applications "${dummy_packages[@]}"
-    print_ok "X11 dummy driver installed"
-
-    local work_dir=$(mktemp -d)
-
-    #---------------------------------------------------------------------------
-    print_step "3" "Downloading RealVNC Server"
-    #---------------------------------------------------------------------------
-    local vnc_rpm="$work_dir/VNC-Server.rpm"
-    
-    if curl -# -L "$vnc_server_url" -o "$vnc_rpm"; then
-        print_ok "Downloaded RealVNC Server"
-    else
-        print_error "Failed to download RealVNC Server"
-        rm -rf "$work_dir"
-        return 1
-    fi
-
-    #---------------------------------------------------------------------------
-    print_step "4" "Installing RealVNC Server"
-    #---------------------------------------------------------------------------
-    if dnf localinstall -y "$vnc_rpm" &>/dev/null; then
-        print_ok "RealVNC Server installed"
-    else
-        print_error "Failed to install RealVNC Server"
-        rm -rf "$work_dir"
-        return 1
-    fi
-    
-    #---------------------------------------------------------------------------
-    print_step "5" "Configuring X11 Dummy Driver"
-    #---------------------------------------------------------------------------
-    # Backup existing xorg.conf if present
-    if [[ -f /etc/X11/xorg.conf ]]; then
-        cp /etc/X11/xorg.conf /etc/X11/xorg.conf.bak
-        print_ok "Backed up existing xorg.conf"
-    fi
-    
-    # Copy RealVNC's dummy driver configuration
-    if [[ -f /etc/X11/vncserver-virtual-dummy.conf ]]; then
-        cp /etc/X11/vncserver-virtual-dummy.conf /etc/X11/xorg.conf
-        print_ok "X11 dummy driver configured"
-    else
-        print_warn "RealVNC dummy config not found, using default"
-    fi
-
-    #---------------------------------------------------------------------------
-    print_step "6" "Configuring RealVNC"
-    #---------------------------------------------------------------------------
-    mkdir -p /etc/vnc/config.d
-
-    cat > /etc/vnc/config.d/common.custom <<EOF
-DisableOptions=FALSE
-EnableRemotePrinting=FALSE
-Encryption=AlwaysOn
-AllowChangeDefaultPrinter=FALSE
-AcceptCutText=TRUE
-Authentication=SystemAuth
-RootSecurity=TRUE
-AuthTimeout=30
-BlackListThreshold=10
-BlackListTimeout=30
-DisableAddNewClient=TRUE
-DisableTrayIcon=2
-EnableManualUpdateChecks=FALSE
-EnableAutoUpdateChecks=0
-GuestAccess=0
-EnableGuestLogin=FALSE
-AllowTcpListenRfb=TRUE
-AllowHTTP=FALSE
-IdleTimeout=0
-QuitOnCloseStatusDialog=FALSE
-AlwaysShared=TRUE
-NeverShared=FALSE
-DisconnectClients=FALSE
-ServiceDiscoveryEnabled=FALSE
-_ConnectToExisting=1
-RandR=1920x1080,3840x2160,3840x1080,3840x1440,2560x1080,1680x1050,1600x1200,1400x1050,1360x768,1280x1024,1280x960,1280x800,1024x768
-EOF
-
-    # Clipboard setting
-    if [[ "$allow_clipboard" == "Y" ]]; then
-        echo "SendCutText=TRUE" >> /etc/vnc/config.d/common.custom
-    else
-        echo "SendCutText=FALSE" >> /etc/vnc/config.d/common.custom
-    fi
-
-    # File sharing setting
-    if [[ "$allow_fileshare" == "Y" ]]; then
-        echo "ShareFiles=TRUE" >> /etc/vnc/config.d/common.custom
-    else
-        echo "ShareFiles=FALSE" >> /etc/vnc/config.d/common.custom
-    fi
-
-    print_ok "VNC configuration created"
-
-    # Configure PAM authentication
-    cat > /etc/pam.d/vncserver.custom <<EOF
-auth include password-auth
-account include password-auth
-session include password-auth
-EOF
-    echo "PamApplicationName=vncserver.custom" >> /etc/vnc/config.d/common.custom
-    print_ok "PAM authentication configured"
-
-    #---------------------------------------------------------------------------
-    print_step "7" "Adding License Key"
-    #---------------------------------------------------------------------------
-    if vnclicense -add "$license_key" &>/dev/null; then
-        print_ok "License key added"
-    else
-        print_error "Failed to add license key"
-    fi
-
-    #---------------------------------------------------------------------------
-    print_step "8" "Configuring Firewall"
-    #---------------------------------------------------------------------------
-    firewall-cmd --permanent --add-service=vncserver-virtuald &>/dev/null
-    firewall-cmd --reload &>/dev/null
-    print_ok "Firewall configured for VNC"
-
-    #---------------------------------------------------------------------------
-    print_step "9" "Starting VNC Service"
-    #---------------------------------------------------------------------------
-    systemctl enable vncserver-virtuald.service --now &>/dev/null
-    print_ok "VNC virtual desktop service started"
-
-    #---------------------------------------------------------------------------
-    print_step "10" "Configuring User Session"
-    #---------------------------------------------------------------------------
-    echo "mate-session" > /etc/skel/.Xclients
-    chmod a+x /etc/skel/.Xclients
-    print_ok "Default session set to MATE"
-
-    # Update existing user homes
-    for user_home in /home/*; do
-        if [[ -d "$user_home" ]]; then
-            local user=$(basename "$user_home")
-            cp /etc/skel/.Xclients "$user_home/.Xclients"
-            chown "$user:" "$user_home/.Xclients"
-            chmod a+x "$user_home/.Xclients"
-        fi
-    done
-    print_ok "Existing user homes updated"
-
-    rm -rf "$work_dir"
-
-    echo ""
-    echo -e "${Green}${Bold}✓ RealVNC Server installation completed${Reset}"
-    echo ""
-}
+ 
 
 # Install ETX Connection Node
 function install_etx_node() {
@@ -2705,7 +2384,6 @@ function install_etx_node() {
     #---------------------------------------------------------------------------
     local etx_versions=()
     
-    # List version directories from HTTP directory listing (12.5.3, 12.5.4, etc.)
     while read -r dirname; do
         # Filter for version-like directories (e.g., 12.5.3, 12.5.4)
         if [[ "$dirname" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -2731,8 +2409,6 @@ function install_etx_node() {
     #---------------------------------------------------------------------------
     local etx_file=""
     
-    # Look for linux-x64 package in ETXConnectionNode directory
-    # Try different possible paths based on directory structure
     local search_paths=(
         "$http_base/$selected_version/ETXConnectionNode/"
         "$http_base/$selected_version/"
@@ -2804,7 +2480,6 @@ EOF
     cp /etc/pam.d/sshd /etc/pam.d/exceed-connection-node
     print_ok "PAM authentication configured"
 
-    # Prevent core dumps
     echo 'ulimit -c 0 > /dev/null 2>&1' > /etc/profile.d/disable-coredumps.sh
     print_ok "Core dumps disabled"
 
@@ -3414,8 +3089,8 @@ function install_remote_desktop() {
     while true; do
         echo ""
         if [[ -n "$desktop_name" ]]; then
-            local rd_options=("xrdp (RDP protocol)" "RealVNC Server" "TurboVNC Server" "ETX Server" "ETX Connection Node" "Back to main menu")
-            show_menu "Remote Desktop Options" 6 "${rd_options[@]}"
+            local rd_options=("xrdp (RDP protocol)" "TurboVNC Server" "ETX Server" "ETX Connection Node" "Back to main menu")
+            show_menu "Remote Desktop Options" 5 "${rd_options[@]}"
         else
             local rd_options=("ETX Server" "Back to main menu")
             show_menu "Remote Desktop Options" 2 "${rd_options[@]}"
@@ -3424,11 +3099,10 @@ function install_remote_desktop() {
         if [[ -n "$desktop_name" ]]; then
             case $menu_index in
                 0) install_xrdp;;
-                1) install_realvnc;;
-                2) install_turbovnc;;
-                3) install_etx_server;;
-                4) install_etx_node;;
-                5) return;;
+                1) install_turbovnc;;
+                2) install_etx_server;;
+                3) install_etx_node;;
+                4) return;;
             esac
         else
             case $menu_index in
