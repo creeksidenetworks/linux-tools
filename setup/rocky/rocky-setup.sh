@@ -245,12 +245,18 @@ function yum_configure_mirror() {
         epel_url="${EPEL_MIRRORS[US]}"
     fi
 
+    # Detect if this is NJU mirror which has different path structure
+    is_nju_mirror=0
+    if [[ "$baseos_url" =~ mirrors.nju.edu.cn ]]; then
+        is_nju_mirror=1
+    fi
+
     shopt -s nocaseglob
     for repo in /etc/yum.repos.d/rocky*.repo; do
         [[ ! -f "$repo" ]] && continue
         
         # Use awk to process the file and update baseurl based on the section
-        awk -v mirror="${baseos_url}" '
+        awk -v mirror="${baseos_url}" -v is_nju="${is_nju_mirror}" '
         /^\[baseos\]/ { section="baseos" }
         /^\[appstream\]/ { section="appstream" }
         /^\[extras\]/ { section="extras" }
@@ -265,20 +271,39 @@ function yum_configure_mirror() {
         /^\[devel\]/ { section="devel" }
         /^\[plus\]/ { section="plus" }
         /^#?baseurl=/ {
-            if (section == "baseos") print "baseurl=" mirror "/$contentdir/$releasever/BaseOS/$basearch/os/"
-            else if (section == "appstream") print "baseurl=" mirror "/$contentdir/$releasever/AppStream/$basearch/os/"
-            else if (section == "extras") print "baseurl=" mirror "/$contentdir/$releasever/extras/$basearch/os/"
-            else if (section == "crb") print "baseurl=" mirror "/$contentdir/$releasever/CRB/$basearch/os/"
-            else if (section == "powertools") print "baseurl=" mirror "/$contentdir/$releasever/PowerTools/$basearch/os/"
-            else if (section == "highavailability") print "baseurl=" mirror "/$contentdir/$releasever/HighAvailability/$basearch/os/"
-            else if (section == "resilientstorage") print "baseurl=" mirror "/$contentdir/$releasever/ResilientStorage/$basearch/os/"
-            else if (section == "rt") print "baseurl=" mirror "/$contentdir/$releasever/RT/$basearch/os/"
-            else if (section == "nfv") print "baseurl=" mirror "/$contentdir/$releasever/NFV/$basearch/os/"
-            else if (section == "sap") print "baseurl=" mirror "/$contentdir/$releasever/SAP/$basearch/os/"
-            else if (section == "saphana") print "baseurl=" mirror "/$contentdir/$releasever/SAPHANA/$basearch/os/"
-            else if (section == "devel") print "baseurl=" mirror "/$contentdir/$releasever/devel/$basearch/os/"
-            else if (section == "plus") print "baseurl=" mirror "/$contentdir/$releasever/plus/$basearch/os/"
-            else print
+            if (is_nju == 1) {
+                # NJU mirror uses /rocky/ path directly without /pub/
+                if (section == "baseos") print "baseurl=" mirror "/rocky/$releasever/BaseOS/$basearch/os/"
+                else if (section == "appstream") print "baseurl=" mirror "/rocky/$releasever/AppStream/$basearch/os/"
+                else if (section == "extras") print "baseurl=" mirror "/rocky/$releasever/extras/$basearch/os/"
+                else if (section == "crb") print "baseurl=" mirror "/rocky/$releasever/CRB/$basearch/os/"
+                else if (section == "powertools") print "baseurl=" mirror "/rocky/$releasever/PowerTools/$basearch/os/"
+                else if (section == "highavailability") print "baseurl=" mirror "/rocky/$releasever/HighAvailability/$basearch/os/"
+                else if (section == "resilientstorage") print "baseurl=" mirror "/rocky/$releasever/ResilientStorage/$basearch/os/"
+                else if (section == "rt") print "baseurl=" mirror "/rocky/$releasever/RT/$basearch/os/"
+                else if (section == "nfv") print "baseurl=" mirror "/rocky/$releasever/NFV/$basearch/os/"
+                else if (section == "sap") print "baseurl=" mirror "/rocky/$releasever/SAP/$basearch/os/"
+                else if (section == "saphana") print "baseurl=" mirror "/rocky/$releasever/SAPHANA/$basearch/os/"
+                else if (section == "devel") print "baseurl=" mirror "/rocky/$releasever/devel/$basearch/os/"
+                else if (section == "plus") print "baseurl=" mirror "/rocky/$releasever/plus/$basearch/os/"
+                else print
+            } else {
+                # Standard mirrors use /$contentdir/ path
+                if (section == "baseos") print "baseurl=" mirror "/$contentdir/$releasever/BaseOS/$basearch/os/"
+                else if (section == "appstream") print "baseurl=" mirror "/$contentdir/$releasever/AppStream/$basearch/os/"
+                else if (section == "extras") print "baseurl=" mirror "/$contentdir/$releasever/extras/$basearch/os/"
+                else if (section == "crb") print "baseurl=" mirror "/$contentdir/$releasever/CRB/$basearch/os/"
+                else if (section == "powertools") print "baseurl=" mirror "/$contentdir/$releasever/PowerTools/$basearch/os/"
+                else if (section == "highavailability") print "baseurl=" mirror "/$contentdir/$releasever/HighAvailability/$basearch/os/"
+                else if (section == "resilientstorage") print "baseurl=" mirror "/$contentdir/$releasever/ResilientStorage/$basearch/os/"
+                else if (section == "rt") print "baseurl=" mirror "/$contentdir/$releasever/RT/$basearch/os/"
+                else if (section == "nfv") print "baseurl=" mirror "/$contentdir/$releasever/NFV/$basearch/os/"
+                else if (section == "sap") print "baseurl=" mirror "/$contentdir/$releasever/SAP/$basearch/os/"
+                else if (section == "saphana") print "baseurl=" mirror "/$contentdir/$releasever/SAPHANA/$basearch/os/"
+                else if (section == "devel") print "baseurl=" mirror "/$contentdir/$releasever/devel/$basearch/os/"
+                else if (section == "plus") print "baseurl=" mirror "/$contentdir/$releasever/plus/$basearch/os/"
+                else print
+            }
             next
         }
         /^mirrorlist=/ { print "#" $0; next }
