@@ -1003,12 +1003,16 @@ function enroll_domain() {
         read -p "  Enter FQDN hostname [${default_fqdn}]: " fqdn_hostname
         [[ -z "$fqdn_hostname" ]] && fqdn_hostname="$default_fqdn"
         
-        # Derive domain name from FQDN
-        domain_name="${fqdn_hostname#*.}"
-        if [[ "$domain_name" == "$fqdn_hostname" ]]; then
-            print_warn "Invalid FQDN. Could not derive domain name."
-            continue
+        # Derive domain name from FQDN (get last two components)
+        local domain_parts=(${fqdn_hostname//./ })
+        if [[ ${#domain_parts[@]} -gt 2 ]]; then
+            # Get last two parts (e.g., "csn.corp" from "proxy.cn.csn.corp")
+            domain_name="${domain_parts[-2]}.${domain_parts[-1]}"
         fi
+         
+        # Allow user to override the derived domain name
+        read -p "  Enter domain name [$domain_name]: " domain_input
+        [[ -n "$domain_input" ]] && domain_name="$domain_input"
 
         # Discover domain info
         realm_output=$(realm discover "$domain_name" 2>/dev/null || true)
@@ -1441,15 +1445,24 @@ function install_devtools() {
 function update_network_settings() {
     print_header "Network Configuration"
 
-    local net_tools=("NetworkManager" "NetworkManager-tui")
-    print_info "Checking network management tools..."
-    install_applications "${net_tools[@]}"
+    # Check if NetworkManager is available
+    if ! command -v nmcli &>/dev/null; then
+        print_info "NetworkManager not found, installing..."
+        local net_tools=("NetworkManager" "NetworkManager-tui")
+        install_applications "${net_tools[@]}"
+    fi
 
     if ! systemctl is-active --quiet NetworkManager; then
+        print_info "Enable and start NetworkManager..."
         systemctl enable NetworkManager &>/dev/null
         systemctl start NetworkManager &>/dev/null
         print_ok "NetworkManager service started"
     fi
+
+    # Install additional network tools
+    local network_utils=("net-tools" "iproute" "bridge-utils")
+    print_info "Installing additional network utilities..."
+    install_applications "${network_utils[@]}"
 
     while true; do
         local net_options=("List network interfaces" "Configure interface" "Create bond interface" "Create VLAN interface" "Back to main menu")
