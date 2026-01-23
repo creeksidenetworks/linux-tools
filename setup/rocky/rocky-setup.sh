@@ -1170,13 +1170,14 @@ function install_docker_ce() {
     else
         # Add Docker repository based on region
         if [[ "$COUNTRY" == "CN" ]]; then
-            cat <<EOF > /etc/yum.repos.d/docker-ce.repo
+            # Overwrite with Aliyun
+            cat <<EOF | sudo tee /etc/yum.repos.d/docker-ce.repo
 [docker-ce-stable]
 name=Docker CE Stable - \$basearch
-baseurl=https://mirrors.nju.edu.cn/docker-ce/linux/rhel/${os_version}/\$basearch/stable
+baseurl=https://mirrors.aliyun.com/docker-ce/linux/centos/9/\$basearch/stable
 enabled=1
-gpgcheck=0
-gpgkey=https://mirrors.nju.edu.cn/docker-ce/linux/rhel/gpg
+gpgcheck=1
+gpgkey=https://mirrors.aliyun.com/docker-ce/linux/centos/gpg
 EOF
             print_ok "Docker CE repository (NJU mirror)"
         else
